@@ -149,7 +149,7 @@ dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bi
 
 Kode ditulis kompatibel dengan **C# 5**, karena NinjaTrader sebelum 8.1.2 hanya mendukung C# 5.
 
-Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 46 skenario: Tick Replay, Volumetric, realtime, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
+Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 69 skenario: Tick Replay, Volumetric, realtime, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
 
 ```bash
 dotnet run --project tools/sim-test -c Release            # semua skenario
