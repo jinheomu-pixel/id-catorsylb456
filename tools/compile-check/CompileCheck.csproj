@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compile-check for the IDCator NinjaTrader 8 indicators outside the NinjaScript Editor.
+
+      dotnet build tools/compile-check
+          NinjaTrader types come from NinjaTraderApiStubs.cs (signatures from the official docs),
+          WPF from the .NET Framework 4.8 reference assemblies and SharpDX from NuGet.
+
+      dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bin"
+          Checks against the REAL NinjaTrader.Core.dll / NinjaTrader.Gui.dll / SharpDX of an
+          installed NinjaTrader 8 (or any folder holding those DLLs).
+
+    LangVersion 5 matches the NinjaScript compiler before NinjaTrader 8.1.2 (newer builds accept C# 8),
+    so the indicators compile on old and new NinjaTrader 8 installs alike.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>5</LangVersion>
+    <OutputType>Library</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>IDCatorCompileCheck</AssemblyName>
+    <UseRealNinjaTrader Condition="'$(NT8BinDir)' != ''">true</UseRealNinjaTrader>
+    <NoWarn>$(NoWarn);CS0169;CS0414;MSB3277;MSB3246</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Xml" />
+    <Compile Include="../../NinjaTrader8/IDCator/*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseRealNinjaTrader)' != 'true'">
+    <PackageReference Include="SharpDX" Version="4.2.0" />
+    <PackageReference Include="SharpDX.Direct2D1" Version="4.2.0" />
+    <PackageReference Include="SharpDX.Mathematics" Version="4.2.0" />
+    <Compile Include="NinjaTraderApiStubs.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseRealNinjaTrader)' == 'true'">
+    <Compile Include="NinjaScriptShims.cs" />
+    <Reference Include="$(NT8BinDir)/NinjaTrader.Core.dll" />
+    <Reference Include="$(NT8BinDir)/NinjaTrader.Gui.dll" />
+    <Reference Include="$(NT8BinDir)/SharpDX.dll" />
+    <Reference Include="$(NT8BinDir)/SharpDX.Direct2D1.dll" />
+    <Reference Include="$(NT8BinDir)/SharpDX.DXGI.dll" />
+    <Reference Include="$(NT8BinDir)/InfragisticsWPF4.v15.1.dll" Condition="Exists('$(NT8BinDir)/InfragisticsWPF4.v15.1.dll')" />
+  </ItemGroup>
+</Project>
