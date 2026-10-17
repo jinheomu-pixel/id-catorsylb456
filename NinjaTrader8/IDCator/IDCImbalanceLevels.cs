@@ -136,9 +136,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
-				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+				if (engine != null && IdcBars.IsBarComplete(Bars, last))
 					lock (sync)
-						AnalyzeClosedBars(CurrentBar);
+						AnalyzeClosedBars(last);
 			}
 			else if (State == State.Terminated)
 			{
@@ -155,7 +156,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (engine == null)
 				return;
 			IdcTrade trade;
-			engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
+			lock (sync)		// the footprint store is also read by the analysis (OnBarUpdate, OnStateChange)
+				engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
 		}
 
 		protected override void OnBarUpdate()

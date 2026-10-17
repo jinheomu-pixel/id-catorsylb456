@@ -191,6 +191,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private bool										realQuotesSeen;
 		private int											lastPrunedBar	= -1;
 		private int											firstStreamBar	= -1;
+		private bool										firstStreamBarPartial;
 
 		public double				TickSize			{ get; private set; }
 		/// <summary>Price levels per footprint row in ticks (Volumetric "Ticks per level"; 1 for tick data).</summary>
@@ -245,6 +246,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			TradesProcessed = 0;
 			lastPrunedBar = -1;
 			firstStreamBar = -1;
+			firstStreamBarPartial = false;
 		}
 
 		/// <summary>True when the chosen source cannot deliver footprints (e.g. Volumetric requested on a non-volumetric chart).</summary>
@@ -329,7 +331,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			TradesProcessed++;
 
 			if (firstStreamBar < 0)
+			{
 				firstStreamBar = currentBar;
+				// partial only when the bar already held volume before this first streamed trade (OnBarUpdate has already
+				// added this trade to the bar); a stream that starts with a bar's opening trade observes the whole bar
+				firstStreamBarPartial = bars == null || currentBar >= bars.Count || bars.GetVolume(currentBar) > e.Volume;
+			}
 
 			if (!UsesVolumetric)
 			{
@@ -439,7 +446,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			}
 
 			// without Tick Replay the bar that was forming when the trade stream started only holds part of its trades
-			if (!HasTickReplay && barIndex == firstStreamBar)
+			if (!HasTickReplay && firstStreamBarPartial && barIndex == firstStreamBar)
 				return null;
 			IdcFootprintBar fp;
 			return tickBars.TryGetValue(barIndex, out fp) ? fp : null;
@@ -456,7 +463,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				var data	= volumetric.Volumes[barIndex];
 				long lo		= ToTick(bars.GetLow(barIndex));
 				long hi		= ToTick(bars.GetHigh(barIndex));
-				if (hi - lo > 20000)
+				// the limit is on footprint ROWS: BTC at 0.01 tick with 100 ticks per level has 250 rows over $250
+				if ((hi - lo) / ticksPerLevel > 20000)
 					return null;
 
 				// Volumetric rows sit on a fixed price grid (multiples of ticks per level): start on the row that holds the
@@ -503,21 +511,26 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 	public static class IdcBars
 	{
 		/// <summary>
-		/// Absolute index of the most recent COMPLETED bar. With Calculate.OnEachTick the bar at CurrentBar is still
-		/// forming, except on historical bars without Tick Replay, where NinjaTrader calls OnBarUpdate once per
-		/// finished bar (the very last loaded bar may still be forming, so it is left for realtime).
-		/// </summary>
-		/// <summary>
 		/// True when a time-based bar has certainly finished: its close timestamp lies in the past. Used when realtime starts
 		/// while the market is closed (evening, weekend), so the last loaded bar is not left waiting for a tick that never comes.
 		/// </summary>
 		public static bool IsBarComplete(Bars bars, int index)
 		{
-			if (bars == null || index < 0 || index >= bars.Count || bars.BarsType == null || !bars.BarsType.IsTimeBased)
+			if (bars == null || index < 0 || index >= bars.Count || bars.BarsPeriod == null)
 				return false;
-			return bars.GetTime(index) <= NinjaTrader.Core.Globals.Now;
+			BarsPeriodType type = bars.BarsPeriod.BarsPeriodType == BarsPeriodType.Volumetric ? bars.BarsPeriod.BaseBarsPeriodType : bars.BarsPeriod.BarsPeriodType;
+			// intraday time bars only: Day / Week / Month bars carry the trading date (00:00), which lies in the past during the session
+			if (type != BarsPeriodType.Second && type != BarsPeriodType.Minute)
+				return false;
+			// margin: feed time stamps may lag the PC clock, a late print must not land in a bar that was already closed
+			return bars.GetTime(index).AddSeconds(30) <= NinjaTrader.Core.Globals.Now;
 		}
 
+		/// <summary>
+		/// Absolute index of the most recent COMPLETED bar. With Calculate.OnEachTick the bar at CurrentBar is still
+		/// forming, except on historical bars without Tick Replay, where NinjaTrader calls OnBarUpdate once per
+		/// finished bar (the very last loaded bar may still be forming, so it is left for realtime).
+		/// </summary>
 		public static int LastClosedBar(State state, bool tickReplay, int currentBar, int count)
 		{
 			if (state == State.Historical && !tickReplay)

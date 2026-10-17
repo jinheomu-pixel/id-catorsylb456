@@ -175,7 +175,9 @@ namespace SimTest
 			c.Check(delivered.Any(a => a.Id.StartsWith("IDCPtkDot81")), "absorption dot alert for bar 81: " + string.Join(" / ", delivered));
 			c.Check(delivered.Any(a => a.Id.StartsWith("IDCPtkLine")), "line retest alert");
 			c.Check(delivered.Any(a => a.Id.StartsWith("IDCPtkBig80")), "big trade alert for bar 80");
-			c.Check(delivered.Count(a => a.Id.StartsWith("IDCPtkBubble80")) == 2, "bubble alerts for bar 80 (one buy id, one sell id)");
+			// one alert id per bubble (bar + side + price), so two same-side bubbles do not swallow each other
+			c.Check(delivered.Any(a => a.Id.StartsWith("IDCPtkBubble80B")) && delivered.Any(a => a.Id.StartsWith("IDCPtkBubble80S")), "bubble alerts for bar 80 (buy and sell)");
+			c.Check(delivered.Where(a => a.Id.StartsWith("IDCPtkBubble80")).Select(a => a.Id).Distinct().Count() == delivered.Count(a => a.Id.StartsWith("IDCPtkBubble80")), "bubble alert ids are unique");
 		}
 
 		private static void PsychStep(Ctx c)

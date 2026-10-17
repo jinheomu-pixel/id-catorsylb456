@@ -92,6 +92,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private BarSignals								liveSignals;
 		private int										liveBar			= -1;
 		private DateTime								lastLiveUpdate	= DateTime.MinValue;
+		private bool									liveDirty;
+		private bool									sessionBreakClose;
 		private IdcFootprintEngine						engine;
 		private IdcBarWindowStats						aggressiveStats;
 		private IdcBarWindowStats						levelStats;
@@ -213,9 +215,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
-				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+				if (engine != null && IdcBars.IsBarComplete(Bars, last))
 					lock (sync)
-						AnalyzeClosedBars(CurrentBar);
+						AnalyzeClosedBars(last);
 			}
 			else if (State == State.Terminated)
 			{
@@ -233,31 +236,46 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			IdcTrade trade;
-			if (!engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade))
-				return;
-			if (firstRealtimeTradeBar < 0 && State == State.Realtime)
-				firstRealtimeTradeBar = trade.BarIndex;
-			if (trade.Side == 0)
-				return;
-			if (!ShowBigTrades || CurrentBar < Count - MaxBarsBack)
-				return;
-
-			lock (sync)
+			bool isTrade;
+			lock (sync)		// the footprint store is also read by the analysis (OnBarUpdate, OnStateChange)
+				isTrade = engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
+			if (isTrade)
 			{
-				bool ready		= printStats.Count >= 200;
-				double limit	= printStats.Threshold(BigTradeStdDev);
-				printStats.Add(trade.BarIndex, trade.Volume);
-				if (!ready || trade.Volume < limit)
-					return;
-
-				List<IdcTrade> list;
-				if (!largePrints.TryGetValue(trade.BarIndex, out list))
-				{
-					list = new List<IdcTrade>();
-					largePrints.Add(trade.BarIndex, list);
-				}
-				list.Add(trade);
+				if (firstRealtimeTradeBar < 0 && State == State.Realtime)
+					firstRealtimeTradeBar = trade.BarIndex;
+				if (trade.Side != 0 && ShowBigTrades && CurrentBar >= Count - MaxBarsBack)
+					lock (sync)
+						RecordPrint(trade);
 			}
+
+			// forming-bar preview AFTER the trade reached the footprint (OnBarUpdate runs before this tick's
+			// OnMarketData); a throttled update is retried on the next event, quote updates included
+			if (LiveBar && State == State.Realtime)
+				lock (sync)
+				{
+					if (isTrade)
+						liveDirty = true;
+					if (liveDirty)
+						UpdateLiveBar();
+				}
+		}
+
+		private void RecordPrint(IdcTrade trade)
+		{
+			bool ready		= printStats.Count >= 200;
+			double limit	= printStats.Threshold(BigTradeStdDev);
+			printStats.Add(trade.BarIndex, trade.Volume);
+			// strictly above: with uniform print sizes (std dev 0) no print is unusually large
+			if (!ready || trade.Volume <= limit)
+				return;
+
+			List<IdcTrade> list;
+			if (!largePrints.TryGetValue(trade.BarIndex, out list))
+			{
+				list = new List<IdcTrade>();
+				largePrints.Add(trade.BarIndex, list);
+			}
+			list.Add(trade);
 		}
 
 		protected override void OnBarUpdate()
@@ -266,22 +284,24 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
+			// a bar that is only seen to close when the next session opens ended long ago: no alert for it
+			sessionBreakClose = Bars.IsFirstBarOfSession;
+			// a gap from the previous close to this bar crosses every level in between
+			double high	= Math.Max(High[0], Close[1]);
+			double low	= Math.Min(Low[0], Close[1]);
 			lock (sync)
 			{
 				AnalyzeClosedBars(closed);
 
 				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
-				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
+				if (CurrentBar != touchBar || high > touchHigh || low < touchLow)
 				{
 					touchBar	= CurrentBar;
-					touchHigh	= High[0];
-					touchLow	= Low[0];
-					CheckLineTouches(CurrentBar, High[0], Low[0]);
+					touchHigh	= high;
+					touchLow	= low;
+					CheckLineTouches(CurrentBar, high, low);
 				}
 				CheckPsychCross(Close[0]);
-
-				if (LiveBar && State == State.Realtime && CurrentBar > closed)
-					UpdateLiveBar();
 
 				if (CurrentBar - lastPruneBar >= 200)
 				{
@@ -358,22 +378,41 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				liveBar		= -1;
 			}
 
-			if (State == State.Realtime && firstRealtimeTradeBar >= 0 && bar >= firstRealtimeTradeBar)
+			if (State == State.Realtime && !sessionBreakClose && firstRealtimeTradeBar >= 0 && bar >= firstRealtimeTradeBar)
 				FireBarAlerts(result, bar);
 		}
 
 		private void UpdateLiveBar()
 		{
-			DateTime now = DateTime.UtcNow;
-			if ((now - lastLiveUpdate).TotalMilliseconds < 250 && liveBar == CurrentBar)
+			// platform clock: wall time in realtime, replay time in Playback
+			DateTime now = NinjaTrader.Core.Globals.Now;
+			if (liveBar == CurrentBar && (now - lastLiveUpdate).TotalMilliseconds < 250)
 				return;
-			lastLiveUpdate = now;
 
 			IdcFootprintBar fp = engine.GetBar(CurrentBar, false);
 			if (fp == null || fp.IsEmpty)
 				return;
-			liveSignals	= Evaluate(fp, CurrentBar);
-			liveBar		= CurrentBar;
+			lastLiveUpdate	= now;
+			liveDirty		= false;
+			liveSignals		= Evaluate(fp, CurrentBar);
+			liveBar			= CurrentBar;
+		}
+
+		/// <summary>First tick of the footprint row that holds the tick (Volumetric "ticks per level"; the tick itself for tick data).</summary>
+		private static long RowStart(long tick, int step)
+		{
+			return tick - (((tick % step) + step) % step);
+		}
+
+		/// <summary>Wick rows lie entirely outside the body's rows: upper = above the row holding the body top, lower = below the row holding the body bottom.</summary>
+		private void WickRange(IdcFootprintBar fp, int bar, bool atHigh, int step, out long from, out long to)
+		{
+			double open		= Bars.GetOpen(bar);
+			double close	= Bars.GetClose(bar);
+			long bodyTop	= engine.ToTick(Math.Max(open, close));
+			long bodyBottom	= engine.ToTick(Math.Min(open, close));
+			from	= atHigh ? RowStart(bodyTop, step) + step : fp.LowTick;
+			to		= atHigh ? fp.HighTick : RowStart(bodyBottom, step) - 1;
 		}
 
 		/// <summary>Bubbles, big trades and absorption dots of one bar, judged against the statistics of earlier bars.</summary>
@@ -387,7 +426,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			double	weak		= aggressiveStats.Threshold(BubbleStdDev);
 			double	strong		= aggressiveStats.Threshold(StrongBubbleStdDev);
 
-			if (ShowBubbles)
+			// bubbles are always evaluated: big trades are matched against them even while they are hidden
+			List<Bubble> bubbles = new List<Bubble>();
 			{
 				List<Bubble> buys	= new List<Bubble>();
 				List<Bubble> sells	= new List<Bubble>();
@@ -396,16 +436,19 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					IdcCell cell = fp.Get(t);
 					if (cell == null)
 						continue;
-					if (cell.Ask >= weak && cell.Ask >= BubbleDominance * cell.Bid)
+					// strictly above the mean as well: a window without variance (std dev 0) marks nothing
+					if (cell.Ask >= weak && cell.Ask > aggressiveStats.Mean && cell.Ask > cell.Bid && cell.Ask >= BubbleDominance * cell.Bid)
 						buys.Add(new Bubble { Bar = bar, Tick = t, Side = 1, Volume = cell.Ask, Strong = cell.Ask >= strong, Scale = cell.Ask / Math.Max(1e-9, weak) });
-					if (cell.Bid >= weak && cell.Bid >= BubbleDominance * cell.Ask)
+					if (cell.Bid >= weak && cell.Bid > aggressiveStats.Mean && cell.Bid > cell.Ask && cell.Bid >= BubbleDominance * cell.Ask)
 						sells.Add(new Bubble { Bar = bar, Tick = t, Side = -1, Volume = cell.Bid, Strong = cell.Bid >= strong, Scale = cell.Bid / Math.Max(1e-9, weak) });
 				}
 				buys.Sort((a, b) => b.Volume.CompareTo(a.Volume));
 				sells.Sort((a, b) => b.Volume.CompareTo(a.Volume));
-				result.Bubbles.AddRange(buys.Take(MaxBubblesPerSide));
-				result.Bubbles.AddRange(sells.Take(MaxBubblesPerSide));
+				bubbles.AddRange(buys.Take(MaxBubblesPerSide));
+				bubbles.AddRange(sells.Take(MaxBubblesPerSide));
 			}
+			if (ShowBubbles)
+				result.Bubbles.AddRange(bubbles);
 
 			if (ShowBigTrades)
 			{
@@ -421,7 +464,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						{
 							if (p.Side != side)
 								continue;
-							if (BigTradeNeedsBubble && !NearBubble(result.Bubbles, p.Tick, side))
+							if (BigTradeNeedsBubble && !NearBubble(bubbles, p.Tick, side, step))
 								continue;
 							if (!found || p.Volume > best.Volume)
 							{
@@ -437,27 +480,33 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 			if (ShowAbsorption)
 			{
-				double open		= Bars.GetOpen(bar);
-				double close	= Bars.GetClose(bar);
-				long bodyTop	= engine.ToTick(Math.Max(open, close));
-				long bodyBottom	= engine.ToTick(Math.Min(open, close));
 				double levelLimit		= levelStats.Threshold(AbsorptionStdDev);
 				double enhancedLimit	= levelStats.Threshold(EnhancedAbsorptionStdDev);
 				double total			= Math.Max(1e-9, fp.TotalVolume);
+				long from, to;
 
-				AbsorptionDot upper = WickDot(fp, bar, bodyTop + 1, fp.HighTick, true, levelLimit, enhancedLimit, total);
-				AbsorptionDot lower = WickDot(fp, bar, fp.LowTick, bodyBottom - 1, false, levelLimit, enhancedLimit, total);
+				WickRange(fp, bar, true, step, out from, out to);
+				AbsorptionDot upper = WickDot(fp, bar, from, to, true, levelLimit, enhancedLimit, total);
+				WickRange(fp, bar, false, step, out from, out to);
+				AbsorptionDot lower = WickDot(fp, bar, from, to, false, levelLimit, enhancedLimit, total);
 				if (upper != null) result.Dots.Add(upper);
 				if (lower != null) result.Dots.Add(lower);
 			}
 			return result;
 		}
 
-		private bool NearBubble(List<Bubble> bubbles, long tick, int side)
+		/// <summary>True when the print lies within BigTradeProximityTicks of a same-side bubble's row (a row spans 'step' ticks).</summary>
+		private bool NearBubble(List<Bubble> bubbles, long tick, int side, int step)
 		{
 			foreach (Bubble b in bubbles)
-				if (b.Side == side && Math.Abs(b.Tick - tick) <= BigTradeProximityTicks)
+			{
+				if (b.Side != side)
+					continue;
+				long rowTop		= b.Tick + step - 1;
+				long distance	= tick < b.Tick ? b.Tick - tick : (tick > rowTop ? tick - rowTop : 0);
+				if (distance <= BigTradeProximityTicks)
 					return true;
+			}
 			return false;
 		}
 
@@ -474,7 +523,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				maxLevel	= Math.Max(maxLevel, v);
 			}
 
-			if (maxLevel < levelLimit || wickVolume / total * 100.0 < MinWickVolumePercent)
+			if (maxLevel < levelLimit || maxLevel <= levelStats.Mean || wickVolume / total * 100.0 < MinWickVolumePercent)
 				return null;
 			return new AbsorptionDot { Bar = bar, AtHigh = atHigh, Enhanced = maxLevel >= enhancedLimit };
 		}
@@ -486,15 +535,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			double levelLimit	= levelStats.Count > 0 ? levelStats.Threshold(AbsorptionStdDev) : double.MaxValue;
-			double open			= Bars.GetOpen(bar);
-			double close		= Bars.GetClose(bar);
-			long bodyTop		= engine.ToTick(Math.Max(open, close));
-			long bodyBottom		= engine.ToTick(Math.Min(open, close));
+			int step			= Math.Max(1, engine.LevelStep);
 
 			foreach (AbsorptionDot dot in s.Dots)
 			{
-				long from	= dot.AtHigh ? bodyTop + 1 : fp.LowTick;
-				long to		= dot.AtHigh ? fp.HighTick : bodyBottom - 1;
+				long from, to;
+				WickRange(fp, bar, dot.AtHigh, step, out from, out to);
 
 				List<long> levels = new List<long>();
 				for (long t = from; t <= to; t++)
@@ -548,18 +594,20 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (price <= 0)
 				return 0;
 
-			// about 0.3 % of price, rounded to a 1 / 2.5 / 5 x 10^n step: NQ 100, ES 25, GC 10, CL 0.25, BTC 250
+			// about 0.3 % of price, rounded to a 1 / 2.5 / 5 x 10^n step that is a whole number of ticks:
+			// NQ 100, ES 25, GC 10, CL 0.25, BTC 250, a 7.80 stock 0.05 (not 0.025)
+			double tick			= engine != null ? engine.TickSize : TickSize;
 			double target		= price * 0.003;
 			double magnitude	= Math.Pow(10, Math.Floor(Math.Log10(target)));
-			double[] nice		= { 1, 2.5, 5, 10 };
-			double step			= magnitude * 10;
+			double[] nice		= { 1, 2.5, 5, 10, 25, 50, 100 };
 			foreach (double n in nice)
-				if (magnitude * n >= target * 0.75)
-				{
-					step = magnitude * n;
-					break;
-				}
-			return Math.Max(step, engine.TickSize);
+			{
+				double step		= magnitude * n;
+				double ticks	= step / tick;
+				if (step >= target * 0.75 && ticks >= 1 - 1e-9 && Math.Abs(ticks - Math.Round(ticks)) < 1e-6)
+					return Math.Round(ticks) * tick;
+			}
+			return Math.Max(1, Math.Ceiling(target / tick - 1e-9)) * tick;
 		}
 
 		private void CheckPsychCross(double price)
@@ -567,7 +615,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (price <= 0)
 				return;
 
-			if (psychStep <= 0 || Bars.IsFirstBarOfSession)
+			// IsFirstBarOfSession is always false on Day/Week/Month bars: there every new bar is a new session
+			if (psychStep <= 0 || (IsFirstTickOfBar && (Bars.IsFirstBarOfSession || (Bars.BarsType != null && !Bars.BarsType.IsIntraday))))
 				psychStep = PsychLevelStep(price);
 
 			if (lastPrice > 0 && psychStep > 0 && State == State.Realtime && AlertPsychCross && ShowPsychLevels)
@@ -589,7 +638,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			string sound = SoundPath(AlertSound);
 			if (AlertBubbles)
 				foreach (Bubble b in s.Bubbles)
-					QueueAlert("IDCPtkBubble" + bar + (b.Side > 0 ? "B" : "S"), Priority.Medium,
+					QueueAlert("IDCPtkBubble" + bar + (b.Side > 0 ? "B" : "S") + b.Tick, Priority.Medium,
 						string.Format("{0}: {1} {2} pressure bubble {3} @ {4}", Instrument.FullName, b.Strong ? "strong" : "weak",
 							b.Side > 0 ? "buying" : "selling", IdcDraw.Volume(b.Volume), Instrument.MasterInstrument.FormatPrice(engine.ToPrice(b.Tick))),
 						sound, AlertRearmSeconds, b.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
@@ -758,7 +807,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private void RenderPsychLevels(ChartScale chartScale, double step, float panelLeft, float panelRight,
 			SharpDX.DirectWrite.TextFormat textFormat, SharpDX.Direct2D1.Brush textBrush)
 		{
-			double reference = lastPrice > 0 ? lastPrice : (chartScale.MaxValue + chartScale.MinValue) / 2.0;
+			// centre on the last price while it is in view, otherwise on the visible range (scrolled back / other price area)
+			double reference = lastPrice > chartScale.MinValue && lastPrice < chartScale.MaxValue ? lastPrice : (chartScale.MaxValue + chartScale.MinValue) / 2.0;
 			long center = (long)Math.Round(reference / step);
 			for (long i = center - PsychLevelsEachSide; i <= center + PsychLevelsEachSide; i++)
 			{

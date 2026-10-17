@@ -126,7 +126,8 @@ namespace SimTest
 			if (c.Check(big != null, "circles drawn"))
 			{
 				// absolute sizing measures volume in typical prints: unit = window mean / 2.5
-				double unit = Math.Max(1e-9, ((NinjaTrader.NinjaScript.Indicators.IDCator.IdcBarWindowStats)R.Get(sim.I, "stats")).Mean / 2.5);
+				// rev2 fix: the unit is frozen when the marker appears (window mean before the 50-lot print)
+				double unit = Math.Max(1e-9, (window.Sum() + 50) / (window.Count + 1) / 2.5);
 				c.Near((16 + 1.5 * Math.Sqrt(84 / unit)) / 2, big.W, 0.01, "buy circle radius = (16 + 1.5 sqrt(84 / unit)) / 2, unit " + unit.ToString("0.###"));
 				c.Near(chart.Y(5001.50), big.Y, 0.5, "buy circle centred at 5001.50");
 				c.Near(chart.BarX(150), big.X, 0.5, "circle centred on bar 150");

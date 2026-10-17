@@ -132,6 +132,7 @@ namespace NinjaTrader.Data
 		public DateTime ActualSessionBegin			{ get; set; }
 		public DateTime ActualSessionEnd			{ get; set; }
 		public DateTime ActualTradingDayExchange	{ get; set; }
+		public DateTime ActualTradingDayEndLocal	{ get; set; }
 		public bool		GetNextSession(DateTime timeLocal, bool includesEndTimeStamp) { return true; }
 		public DateTime	GetTradingDay(DateTime timeLocal) { return timeLocal.Date; }
 		public bool		IsInSession(DateTime timeLocal, bool includesEndTimeStamp, bool isIntraDay) { return true; }

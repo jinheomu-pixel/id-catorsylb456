@@ -237,11 +237,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				// market closed (evening / weekend): profile the last loaded bar and close a finished period now,
 				// instead of showing it as the live period until the next session's first tick
-				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+				if (engine != null && IdcBars.IsBarComplete(Bars, last))
 					lock (sync)
 					{
-						AnalyzeClosedBars(CurrentBar);
-						if (current != null && current.EndBar == CurrentBar && PeriodEnd(current) <= NinjaTrader.Core.Globals.Now)
+						AnalyzeClosedBars(last);
+						if (current != null && current.EndBar == last && PeriodEnd(current) <= NinjaTrader.Core.Globals.Now)
 						{
 							FinalizePeriod(current);
 							current = null;
@@ -264,7 +265,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (engine == null)
 				return;
 			IdcTrade trade;
-			engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
+			lock (sync)		// the footprint store is also read by the analysis (OnBarUpdate, OnStateChange)
+				engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
 		}
 
 		protected override void OnBarUpdate()
@@ -332,10 +334,26 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (windowStarted)
 				return true;
 			long key, previousKey;
-			if (bar > 0 && barKeys.TryGetValue(bar, out key) && barKeys.TryGetValue(bar - 1, out previousKey) && key == previousKey)
+			// wait only when a later period starts inside the loaded data; when the cut period is the one still forming,
+			// profile it from the cut instead of leaving it blank until the next boundary
+			if (bar > 0 && barKeys.TryGetValue(bar, out key) && barKeys.TryGetValue(bar - 1, out previousKey) && key == previousKey
+				&& KeyAt(Count - 1) != key)
 				return false;
 			windowStarted = true;
 			return true;
+		}
+
+		/// <summary>Period key of any loaded bar without touching the sequential trading-day state used by PeriodKey.</summary>
+		private long KeyAt(int bar)
+		{
+			DateTime barTime = Bars.GetTime(bar);
+			if (ProfileTimeframe == IdcProfileTimeframe.Daily || ProfileTimeframe == IdcProfileTimeframe.Weekly)
+			{
+				DateTime day = Bars.BarsType != null && !Bars.BarsType.IsIntraday ? barTime.Date : sessionIterator.GetTradingDay(barTime.AddTicks(-1)).Date;
+				long d = day.Ticks / TimeSpan.TicksPerDay;
+				return ProfileTimeframe == IdcProfileTimeframe.Daily ? d : d / 7;
+			}
+			return barTime.AddTicks(-1).Ticks / (TimeSpan.TicksPerMinute * PeriodMinutes());
 		}
 
 		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
@@ -363,7 +381,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (Bars.BarsType == null || !Bars.BarsType.IsIntraday)
 					return DateTime.MaxValue;
 				sessionIterator.GetNextSession(Bars.GetTime(period.EndBar), true);
-				return sessionIterator.ActualSessionEnd;
+				// a trading day can hold several sessions (e.g. CBOT grains): the period ends with the trading day, not the session
+				return sessionIterator.ActualTradingDayEndLocal;
 			}
 			return new DateTime((period.Key + 1) * TimeSpan.TicksPerMinute * PeriodMinutes());
 		}
@@ -606,8 +625,17 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					peak = Math.Max(peak, smooth[r]);
 				// 0 % keeps the whole cluster, 100 % shrinks it to its peak rows
 				double edge = threshold + (peak - threshold) * ClusterSensitivity / 100.0;
+				int untrimmedFirst = first, untrimmedLast = last;
 				while (first < last && smooth[first] < edge)	first++;
 				while (last > first && smooth[last] < edge)		last--;
+				// trimming narrows a node, it must not delete one that passed the threshold: regrow towards the heavier side
+				while (last - first + 1 < MinClusterRows && (first > untrimmedFirst || last < untrimmedLast))
+				{
+					if (first > untrimmedFirst && (last >= untrimmedLast || smooth[first - 1] >= smooth[last + 1]))
+						first--;
+					else
+						last++;
+				}
 
 				if (last - first + 1 < MinClusterRows)
 					continue;

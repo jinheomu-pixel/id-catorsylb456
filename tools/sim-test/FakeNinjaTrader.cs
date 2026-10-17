@@ -437,7 +437,16 @@ namespace NinjaTrader.Data
 				end		= begin + SessionLength;
 			}
 			tradingDay = SessionStart.TotalHours >= 12 ? begin.Date.AddDays(1) : begin.Date;
+			// rev2: optional intra-day break -> two sessions with the same trading day (e.g. CBOT grains)
+			if (BreakLength > TimeSpan.Zero)
+			{
+				DateTime breakBegin = begin + BreakOffset, breakEnd = breakBegin + BreakLength;
+				if (t < breakBegin) end = breakBegin;
+				else begin = breakEnd;
+			}
 		}
+		public TimeSpan		BreakOffset		= TimeSpan.Zero;
+		public TimeSpan		BreakLength		= TimeSpan.Zero;
 	}
 
 	/// <summary>Bars backed by arrays. The harness appends/updates bars; indicators only read.</summary>
@@ -547,6 +556,7 @@ namespace NinjaTrader.Data
 		public DateTime ActualSessionBegin			{ get; set; }
 		public DateTime ActualSessionEnd			{ get; set; }
 		public DateTime ActualTradingDayExchange	{ get; set; }
+		public DateTime ActualTradingDayEndLocal	{ get; set; }
 
 		public bool GetNextSession(DateTime timeLocal, bool includesEndTimeStamp)
 		{
@@ -556,6 +566,17 @@ namespace NinjaTrader.Data
 			ActualSessionBegin			= b;
 			ActualSessionEnd			= e;
 			ActualTradingDayExchange	= d;
+			// end of the whole trading day (all its sessions)
+			DateTime b2, e2, d2;
+			DateTime probe = e;
+			ActualTradingDayEndLocal = e;
+			for (int i = 0; i < 8; i++)
+			{
+				bars.TradingHours.GetSession(probe, false, out b2, out e2, out d2);
+				if (d2 != d) break;
+				ActualTradingDayEndLocal = e2;
+				probe = e2;
+			}
 			return true;
 		}
 

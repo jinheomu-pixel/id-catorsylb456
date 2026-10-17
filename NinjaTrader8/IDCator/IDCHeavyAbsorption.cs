@@ -77,6 +77,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			public long		Tick;
 			public double	LargestPrint;
 			public double	QualifyingVolume;
+			public double	PendingVolume;		// SameTimestamp sweep still being summed (preview only)
+			public double	Unit = 1;			// typical print size when the marker appeared (absolute sizing stays stable)
 			public double	DisplayValue;
 		}
 
@@ -173,9 +175,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): close the last loaded bar now instead of waiting for a tick
-				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+				if (engine != null && IdcBars.IsBarComplete(Bars, last))
 					lock (sync)
-						while (lastClosedBar < CurrentBar)
+						while (lastClosedBar < last)
 						{
 							lastClosedBar++;
 							OnBarClosed(lastClosedBar);
@@ -324,6 +327,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (firstStatsBar < 0)
 				firstStatsBar = print.BarIndex;
 
+			// a previewed sweep becomes final here
+			BarData previewData;
+			if (barData.TryGetValue(print.BarIndex, out previewData))
+			{
+				Marker previewed = print.Side > 0 ? previewData.Buy : previewData.Sell;
+				if (previewed != null)
+					previewed.PendingVolume = 0;
+			}
+
 			bool qualifies = Qualifies(print);
 			stats.Add(print.BarIndex, print.Volume);
 			if (!qualifies)
@@ -339,7 +351,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		{
 			if (!hasPending || !Qualifies(pending))
 				return;
-			PlaceMarker(pending);
+			PlaceMarker(pending).PendingVolume = pending.Volume;
 			RefreshDisplay(GetBarData(pending.BarIndex));
 		}
 
@@ -350,7 +362,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			Marker marker	= print.Side > 0 ? data.Buy : data.Sell;
 			if (marker == null)
 			{
-				marker = new Marker { Bar = print.BarIndex, Side = print.Side, Tick = print.Tick, LargestPrint = print.Volume };
+				marker = new Marker { Bar = print.BarIndex, Side = print.Side, Tick = print.Tick, LargestPrint = print.Volume,
+					Unit = stats.Count > 0 ? Math.Max(1e-9, stats.Mean / 2.5) : 1.0 };
 				if (print.Side > 0)
 					data.Buy = marker;
 				else
@@ -375,10 +388,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private double DisplayValue(BarData data, Marker marker)
 		{
 			if (LabelMode == IdcAbsorptionLabel.QualifyingVolume)
-				return marker.QualifyingVolume;
+				return marker.QualifyingVolume + marker.PendingVolume;
 			Dictionary<long, double> side = marker.Side > 0 ? data.BuyVolume : data.SellVolume;
 			if (side == null)
-				return marker.DisplayValue;		// bar closed, value is final
+				return Math.Max(marker.DisplayValue, marker.LargestPrint);	// bar closed: value is final (a marker placed after the close shows its print)
 			double v;
 			side.TryGetValue(marker.Tick, out v);
 			return Math.Max(v, marker.LargestPrint);
@@ -458,7 +471,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			int toIndex		= ChartBars.ToIndex;
 
 			List<Marker> visible = new List<Marker>();
-			double unit;
 			lock (sync)
 			{
 				for (int bar = fromIndex; bar <= toIndex; bar++)
@@ -468,12 +480,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						continue;
 					// optional floor: hide smaller markers
 					if (data.Buy != null && data.Buy.DisplayValue >= MinVolume)
-						visible.Add(new Marker { Bar = bar, Side = 1, Tick = data.Buy.Tick, DisplayValue = data.Buy.DisplayValue });
+						visible.Add(new Marker { Bar = bar, Side = 1, Tick = data.Buy.Tick, DisplayValue = data.Buy.DisplayValue, Unit = data.Buy.Unit });
 					if (data.Sell != null && data.Sell.DisplayValue >= MinVolume)
-						visible.Add(new Marker { Bar = bar, Side = -1, Tick = data.Sell.Tick, DisplayValue = data.Sell.DisplayValue });
+						visible.Add(new Marker { Bar = bar, Side = -1, Tick = data.Sell.Tick, DisplayValue = data.Sell.DisplayValue, Unit = data.Sell.Unit });
 				}
-				// absolute sizing is expressed in "typical NQ prints" (mean about 2.5) so it carries over to ES, stocks and crypto
-				unit = stats != null && stats.Count > 0 ? Math.Max(1e-9, stats.Mean / 2.5) : 1.0;
 			}
 
 			SharpDX.Direct2D1.Brush textBrush = dxBrushes.Get(RenderTarget, TextBrush, 1.0);
@@ -495,7 +505,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					{
 						double	diameter;
 						if (CircleSizing == IdcCircleSizing.Absolute)
-							diameter = Math.Min(MaxDiameter, MinDiameter + SizeFactor * Math.Sqrt(Math.Max(0, m.DisplayValue) / unit));
+							diameter = Math.Min(MaxDiameter, MinDiameter + SizeFactor * Math.Sqrt(Math.Max(0, m.DisplayValue) / m.Unit));
 						else
 							diameter = MinDiameter + (MaxDiameter - MinDiameter) * (maxValue > 0 ? Math.Sqrt(Math.Max(0, m.DisplayValue) / maxValue) : 1);
 						float	radius		= (float)(Math.Max(MinDiameter, diameter) / 2.0);
