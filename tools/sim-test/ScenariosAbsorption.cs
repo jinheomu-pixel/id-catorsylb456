@@ -125,7 +125,9 @@ namespace SimTest
 			SharpDX.Direct2D1.DrawOp big = chart.Ops.Where(o => o.Kind == "FillEllipse").OrderByDescending(o => o.W).FirstOrDefault();
 			if (c.Check(big != null, "circles drawn"))
 			{
-				c.Near((16 + 1.5 * Math.Sqrt(84)) / 2, big.W, 0.01, "buy circle radius = (16 + 1.5 sqrt(84)) / 2");
+				// absolute sizing measures volume in typical prints: unit = window mean / 2.5
+				double unit = Math.Max(1e-9, ((NinjaTrader.NinjaScript.Indicators.IDCator.IdcBarWindowStats)R.Get(sim.I, "stats")).Mean / 2.5);
+				c.Near((16 + 1.5 * Math.Sqrt(84 / unit)) / 2, big.W, 0.01, "buy circle radius = (16 + 1.5 sqrt(84 / unit)) / 2, unit " + unit.ToString("0.###"));
 				c.Near(chart.Y(5001.50), big.Y, 0.5, "buy circle centred at 5001.50");
 				c.Near(chart.BarX(150), big.X, 0.5, "circle centred on bar 150");
 			}

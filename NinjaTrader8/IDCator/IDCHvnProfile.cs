@@ -137,6 +137,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int							lastAnalyzedBar	= -1;
 		private int							nextZoneId;
 		private bool						calculateWarning;
+		private bool						windowStarted;
+		private readonly List<IdcPendingAlert> pendingAlerts = new List<IdcPendingAlert>();
 		private int						touchBar	= -1;
 		private double					touchHigh;
 		private double					touchLow;
@@ -161,7 +163,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				TargetRows					= 60;
 				HvnThresholdPercent			= 70;
 				SmoothingPasses				= 2;
-				ClusterSensitivity			= 50;
+				ClusterSensitivity			= 25;
 				MinClusterRows				= 2;
 				GapToleranceRows			= 1;
 				MaxClustersPerPeriod		= 3;
@@ -221,6 +223,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					lastAnalyzedBar	= -1;
 					nextZoneId		= 0;
 					tradingDay		= DateTime.MinValue;
+					windowStarted	= false;
+					pendingAlerts.Clear();
 				}
 			}
 			else if (State == State.Historical)
@@ -228,6 +232,22 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				calculateWarning = Calculate != Calculate.OnEachTick;
 				if (calculateWarning)
 					Log(Name + ": set Calculate to 'On each tick' for correct footprint data.", LogLevel.Warning);
+			}
+			else if (State == State.Realtime)
+			{
+				// market closed (evening / weekend): profile the last loaded bar and close a finished period now,
+				// instead of showing it as the live period until the next session's first tick
+				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+					lock (sync)
+					{
+						AnalyzeClosedBars(CurrentBar);
+						if (current != null && current.EndBar == CurrentBar && PeriodEnd(current) <= NinjaTrader.Core.Globals.Now)
+						{
+							FinalizePeriod(current);
+							current = null;
+						}
+						BuildLiveProfile();
+					}
 			}
 			else if (State == State.Terminated)
 			{
@@ -261,16 +281,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				}
 
 				int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
-				bool changed = false;
-				while (lastAnalyzedBar < closed)
-				{
-					lastAnalyzedBar++;
-					if (lastAnalyzedBar >= Count - MaxBarsBack)
-					{
-						AddBar(lastAnalyzedBar);
-						changed = true;
-					}
-				}
+				bool changed = AnalyzeClosedBars(closed);
 
 				// the forming bar opened a new period and the old one has no open bars left: close it now so its
 				// zones can be touched from the first bar of the new period on
@@ -297,6 +308,64 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (barKeys.Count > MaxBarsBack + 200)
 					PruneKeys(CurrentBar - MaxBarsBack - 50);
 			}
+			FlushAlerts();
+		}
+
+		private bool AnalyzeClosedBars(int closed)
+		{
+			bool changed = false;
+			while (lastAnalyzedBar < closed)
+			{
+				lastAnalyzedBar++;
+				if (lastAnalyzedBar >= Count - MaxBarsBack && WindowReady(lastAnalyzedBar))
+				{
+					AddBar(lastAnalyzedBar);
+					changed = true;
+				}
+			}
+			return changed;
+		}
+
+		/// <summary>When "Max bars back" cuts history mid-period, wait for the next period boundary so the first profile is complete.</summary>
+		private bool WindowReady(int bar)
+		{
+			if (windowStarted)
+				return true;
+			long key, previousKey;
+			if (bar > 0 && barKeys.TryGetValue(bar, out key) && barKeys.TryGetValue(bar - 1, out previousKey) && key == previousKey)
+				return false;
+			windowStarted = true;
+			return true;
+		}
+
+		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
+		private void FlushAlerts()
+		{
+			List<IdcPendingAlert> copy;
+			lock (sync)
+			{
+				if (pendingAlerts.Count == 0)
+					return;
+				copy = new List<IdcPendingAlert>(pendingAlerts);
+				pendingAlerts.Clear();
+			}
+			foreach (IdcPendingAlert a in copy)
+				Alert(a.Id, a.Priority, a.Message, a.Sound, a.RearmSeconds, a.BackBrush, a.ForeBrush);
+		}
+
+		/// <summary>Local time at which a period ends (MaxValue when unknown).</summary>
+		private DateTime PeriodEnd(Period period)
+		{
+			if (ProfileTimeframe == IdcProfileTimeframe.Weekly)
+				return DateTime.MaxValue;
+			if (ProfileTimeframe == IdcProfileTimeframe.Daily)
+			{
+				if (Bars.BarsType == null || !Bars.BarsType.IsIntraday)
+					return DateTime.MaxValue;
+				sessionIterator.GetNextSession(Bars.GetTime(period.EndBar), true);
+				return sessionIterator.ActualSessionEnd;
+			}
+			return new DateTime((period.Key + 1) * TimeSpan.TicksPerMinute * PeriodMinutes());
 		}
 
 		#region Periods
@@ -378,10 +447,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				volume = Convert.ToDouble(NinjaTrader.Core.Globals.ToCryptocurrencyVolume((long)volume));
 			long lo = engine.ToTick(Bars.GetLow(bar));
 			long hi = engine.ToTick(Bars.GetHigh(bar));
-			if (volume <= 0 || hi < lo || hi - lo > 20000)
+			if (volume <= 0 || hi < lo)
 				return;
-			double each = volume / (hi - lo + 1);
-			for (long t = lo; t <= hi; t++)
+			// very wide bars (crypto with 0.01 ticks): spread over at most ~20000 cells instead of dropping the bar
+			long stride	= Math.Max(1, (hi - lo + 20000) / 20000);
+			long cells	= (hi - lo) / stride + 1;
+			double each	= volume / cells;
+			for (long t = lo; t <= hi; t += stride)
 				current.Add(t, each, 0, 0);
 		}
 
@@ -532,7 +604,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				double peak = 0;
 				for (int r = first; r <= last; r++)
 					peak = Math.Max(peak, smooth[r]);
-				double edge = peak * ClusterSensitivity / 100.0;
+				// 0 % keeps the whole cluster, 100 % shrinks it to its peak rows
+				double edge = threshold + (peak - threshold) * ClusterSensitivity / 100.0;
 				while (first < last && smooth[first] < edge)	first++;
 				while (last > first && smooth[last] < edge)		last--;
 
@@ -589,8 +662,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					string message = string.Format("{0}: price touched HVN zone {1}-{2} (POC {3})", Instrument.FullName,
 						Instrument.MasterInstrument.FormatPrice(bottom), Instrument.MasterInstrument.FormatPrice(top),
 						Instrument.MasterInstrument.FormatPrice(engine.ToPrice(zone.PocTick)));
-					Alert("IDCHvn" + zone.Id, Priority.Medium, message, SoundPath(AlertSound), AlertRearmSeconds,
-						Brushes.DarkGoldenrod, Brushes.Black);
+					pendingAlerts.Add(new IdcPendingAlert { Id = "IDCHvn" + zone.Id, Priority = Priority.Medium, Message = message,
+						Sound = IdcSound.Resolve(AlertSound), RearmSeconds = AlertRearmSeconds,
+						BackBrush = Brushes.DarkGoldenrod, ForeBrush = Brushes.Black });
 				}
 			}
 		}
@@ -620,14 +694,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				barKeys.Remove(key);
 		}
 
-		private static string SoundPath(string file)
-		{
-			if (string.IsNullOrWhiteSpace(file))
-				return string.Empty;
-			if (System.IO.Path.IsPathRooted(file))
-				return file;
-			return System.IO.Path.Combine(NinjaTrader.Core.Globals.InstallDir, "sounds", file);
-		}
 		#endregion
 
 		#region Rendering
@@ -691,8 +757,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					long	rowLow	= h.LowTick + (long)r * h.RowTicks;
 					float	yTop	= chartScale.GetYByValue(engine.ToPrice(rowLow + h.RowTicks - 1) + tick * 0.5);
 					float	yBottom	= chartScale.GetYByValue(engine.ToPrice(rowLow) - tick * 0.5);
+					if (yBottom < ChartPanel.Y || yTop > ChartPanel.Y + ChartPanel.H)
+						continue;
 					float	height	= Math.Max(1, yBottom - yTop - (yBottom - yTop >= 4 ? 1 : 0));
-					RenderTarget.FillRectangle(new SharpDX.RectangleF(Math.Max(panelLeft, x0), yTop, (float)(width * h.Rows[r]), height), brush);
+					// clip at the panel edges instead of sliding the row (period started off-screen)
+					float	left	= Math.Max(panelLeft, x0);
+					float	right	= Math.Min(panelRight, x0 + (float)(width * h.Rows[r]));
+					if (right - left < 0.5f)
+						continue;
+					RenderTarget.FillRectangle(new SharpDX.RectangleF(left, yTop, right - left, height), brush);
 				}
 			}
 
@@ -713,6 +786,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 					float yTop		= chartScale.GetYByValue(engine.ToPrice(zone.HighTick) + tick * 0.5);
 					float yBottom	= chartScale.GetYByValue(engine.ToPrice(zone.LowTick) - tick * 0.5);
+					if (yBottom < ChartPanel.Y || yTop > ChartPanel.Y + ChartPanel.H)
+						continue;	// vertically off-screen
 					if (yBottom - yTop < 2)
 					{
 						float mid	= (yTop + yBottom) / 2f;
@@ -754,7 +829,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						if (!double.IsNaN(zone.BuyShare))
 						{
 							bool	buyers	= zone.BuyShare >= 0.5;
-							int		pct		= (int)Math.Round(100 * (buyers ? zone.BuyShare : 1 - zone.BuyShare));
+							// the dominant side always has the majority: never show 50 %, as in the original
+							int		pct		= Math.Max(51, (int)Math.Round(100 * (buyers ? zone.BuyShare : 1 - zone.BuyShare), MidpointRounding.AwayFromZero));
 							SharpDX.Size2F pctSize = IdcDraw.Text(RenderTarget, labelFormat, " | " + pct + "%", right, yMid, buyers ? buyBrush : sellBrush, IdcTextAnchor.MiddleRight);
 							right -= pctSize.Width;
 						}
@@ -820,7 +896,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		public int SmoothingPasses { get; set; }
 
 		[Range(0, 100)]
-		[Display(Name = "Cluster sensitivity %", Description = "Cluster edges below this % of the cluster's own peak are trimmed (higher = tighter zones).", Order = 6, GroupName = "1. Profile")]
+		[Display(Name = "Cluster sensitivity %", Description = "Trims weak cluster edges: 0 = keep every row above the HVN threshold, 100 = only the peak rows (higher = tighter zones).", Order = 6, GroupName = "1. Profile")]
 		public int ClusterSensitivity { get; set; }
 
 		[Range(1, 100)]

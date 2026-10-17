@@ -90,6 +90,7 @@ namespace NinjaTrader.Data
 	public abstract class BarsType
 	{
 		public bool IsIntraday { get; set; }
+		public bool IsTimeBased { get; set; }
 	}
 
 	public class BarsSeries

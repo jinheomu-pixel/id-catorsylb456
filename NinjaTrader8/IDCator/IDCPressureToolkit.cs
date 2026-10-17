@@ -103,6 +103,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private double									lastPrice;
 		private double									psychStep;
 		private bool									calculateWarning;
+		private int										firstRealtimeTradeBar = -1;
+		private readonly List<IdcPendingAlert>			pendingAlerts	= new List<IdcPendingAlert>();
 		private int						touchBar	= -1;
 		private double					touchHigh;
 		private double					touchLow;
@@ -197,6 +199,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					lastPruneBar	= -1;
 					nextLineId		= 0;
 					lastPrice		= 0;
+					firstRealtimeTradeBar	= -1;
+					pendingAlerts.Clear();
 					psychStep		= 0;
 				}
 			}
@@ -205,6 +209,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				calculateWarning = Calculate != Calculate.OnEachTick;
 				if (calculateWarning)
 					Log(Name + ": set Calculate to 'On each tick' for correct footprint data.", LogLevel.Warning);
+			}
+			else if (State == State.Realtime)
+			{
+				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
+				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+					lock (sync)
+						AnalyzeClosedBars(CurrentBar);
 			}
 			else if (State == State.Terminated)
 			{
@@ -222,7 +233,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			IdcTrade trade;
-			if (!engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade) || trade.Side == 0)
+			if (!engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade))
+				return;
+			if (firstRealtimeTradeBar < 0 && State == State.Realtime)
+				firstRealtimeTradeBar = trade.BarIndex;
+			if (trade.Side == 0)
 				return;
 			if (!ShowBigTrades || CurrentBar < Count - MaxBarsBack)
 				return;
@@ -253,12 +268,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
 			lock (sync)
 			{
-				while (lastAnalyzedBar < closed)
-				{
-					lastAnalyzedBar++;
-					if (lastAnalyzedBar >= Count - MaxBarsBack)
-						AnalyzeClosedBar(lastAnalyzedBar);
-				}
+				AnalyzeClosedBars(closed);
 
 				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
 				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
@@ -279,6 +289,39 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					Prune(CurrentBar - MaxBarsBack);
 				}
 			}
+			FlushAlerts();
+		}
+
+		private void AnalyzeClosedBars(int closed)
+		{
+			while (lastAnalyzedBar < closed)
+			{
+				lastAnalyzedBar++;
+				if (lastAnalyzedBar >= Count - MaxBarsBack)
+					AnalyzeClosedBar(lastAnalyzedBar);
+			}
+		}
+
+		private void QueueAlert(string id, Priority priority, string message, string sound, int rearmSeconds,
+			System.Windows.Media.Brush backBrush, System.Windows.Media.Brush foreBrush)
+		{
+			pendingAlerts.Add(new IdcPendingAlert { Id = id, Priority = priority, Message = message, Sound = sound,
+				RearmSeconds = rearmSeconds, BackBrush = backBrush, ForeBrush = foreBrush });
+		}
+
+		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
+		private void FlushAlerts()
+		{
+			List<IdcPendingAlert> copy;
+			lock (sync)
+			{
+				if (pendingAlerts.Count == 0)
+					return;
+				copy = new List<IdcPendingAlert>(pendingAlerts);
+				pendingAlerts.Clear();
+			}
+			foreach (IdcPendingAlert a in copy)
+				Alert(a.Id, a.Priority, a.Message, a.Sound, a.RearmSeconds, a.BackBrush, a.ForeBrush);
 		}
 
 		#region Bar analysis
@@ -315,7 +358,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				liveBar		= -1;
 			}
 
-			if (State == State.Realtime)
+			if (State == State.Realtime && firstRealtimeTradeBar >= 0 && bar >= firstRealtimeTradeBar)
 				FireBarAlerts(result, bar);
 		}
 
@@ -492,7 +535,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 				line.EndBar = bar;
 				if (AlertAbsorptionLineTouch && State == State.Realtime)
-					Alert("IDCPtkLine" + line.Id, Priority.Medium,
+					QueueAlert("IDCPtkLine" + line.Id, Priority.Medium,
 						string.Format("{0}: price retested absorption level {1}", Instrument.FullName, Instrument.MasterInstrument.FormatPrice(price)),
 						SoundPath(AlertSound), AlertRearmSeconds, line.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
 			}
@@ -534,7 +577,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				bool up = price > lastPrice;
 				double level = up ? Math.Floor(price / psychStep + 1e-9) * psychStep : Math.Ceiling(price / psychStep - 1e-9) * psychStep;
 				if (lastPrice != price && (up ? level > lastPrice + 1e-9 : level < lastPrice - 1e-9))
-					Alert("IDCPtkPsych" + Math.Round(level / psychStep), Priority.Low,
+					QueueAlert("IDCPtkPsych" + Math.Round(level / psychStep), Priority.Low,
 						string.Format("{0}: price crossed psychological level {1}", Instrument.FullName, Instrument.MasterInstrument.FormatPrice(level)),
 						SoundPath(AlertSound), Math.Max(AlertRearmSeconds, 30), Brushes.DimGray, Brushes.White);
 			}
@@ -546,21 +589,21 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			string sound = SoundPath(AlertSound);
 			if (AlertBubbles)
 				foreach (Bubble b in s.Bubbles)
-					Alert("IDCPtkBubble" + bar + (b.Side > 0 ? "B" : "S"), Priority.Medium,
+					QueueAlert("IDCPtkBubble" + bar + (b.Side > 0 ? "B" : "S"), Priority.Medium,
 						string.Format("{0}: {1} {2} pressure bubble {3} @ {4}", Instrument.FullName, b.Strong ? "strong" : "weak",
 							b.Side > 0 ? "buying" : "selling", IdcDraw.Volume(b.Volume), Instrument.MasterInstrument.FormatPrice(engine.ToPrice(b.Tick))),
 						sound, AlertRearmSeconds, b.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
 
 			if (AlertBigTrades)
 				foreach (BigTrade t in s.BigTrades)
-					Alert("IDCPtkBig" + bar + (t.Side > 0 ? "B" : "S"), Priority.High,
+					QueueAlert("IDCPtkBig" + bar + (t.Side > 0 ? "B" : "S"), Priority.High,
 						string.Format("{0}: big {1} trade {2} @ {3}", Instrument.FullName, t.Side > 0 ? "BUY" : "SELL",
 							IdcDraw.Volume(t.Volume), Instrument.MasterInstrument.FormatPrice(engine.ToPrice(t.Tick))),
 						sound, AlertRearmSeconds, t.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
 
 			if (AlertAbsorptionDots)
 				foreach (AbsorptionDot d in s.Dots)
-					Alert("IDCPtkDot" + bar + (d.AtHigh ? "H" : "L"), Priority.Medium,
+					QueueAlert("IDCPtkDot" + bar + (d.AtHigh ? "H" : "L"), Priority.Medium,
 						string.Format("{0}: {1}absorption at the bar {2}", Instrument.FullName, d.Enhanced ? "strong " : "", d.AtHigh ? "high" : "low"),
 						sound, AlertRearmSeconds, d.AtHigh ? Brushes.DarkRed : Brushes.DarkGreen, Brushes.White);
 		}
@@ -588,11 +631,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		private static string SoundPath(string file)
 		{
-			if (string.IsNullOrWhiteSpace(file))
-				return string.Empty;
-			if (System.IO.Path.IsPathRooted(file))
-				return file;
-			return System.IO.Path.Combine(NinjaTrader.Core.Globals.InstallDir, "sounds", file);
+			return IdcSound.Resolve(file);
 		}
 		#endregion
 

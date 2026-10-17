@@ -34,6 +34,7 @@ namespace SimTest
 			scenarios.AddRange(PressureScenarios.All());
 			scenarios.AddRange(EngineScenarios.All());
 			scenarios.AddRange(FormatScenarios.All());
+			scenarios.AddRange(ReviewScenarios.All());
 			scenarios.AddRange(StressScenarios.All());
 			if (filters.Count > 0)
 				scenarios = scenarios.Where(s => filters.Any(f => s.Name.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();

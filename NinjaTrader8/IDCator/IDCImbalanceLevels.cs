@@ -57,6 +57,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		private readonly object			sync			= new object();
 		private readonly List<Zone>		zones			= new List<Zone>();
+		private readonly List<IdcPendingAlert> pendingAlerts = new List<IdcPendingAlert>();
 		private IdcFootprintEngine		engine;
 		private IdcDxBrushCache			dxBrushes;
 		private int						lastAnalyzedBar	= -1;
@@ -83,9 +84,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 				MinImbalanceRatio			= 5.0;
 				MinStackedLevels			= 3;
-				MinLevelVolume				= 1;
+				MinLevelVolume				= 0;
 				MinStackVolume				= 0;
-				ZeroHandling				= IdcZeroHandling.CountAsOne;
+				ZeroHandling				= IdcZeroHandling.CountAsMinRatio;
 				OnlyBeyondClose				= true;
 				DiscardIfNextBarTouches		= false;
 
@@ -101,7 +102,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				MaxOpacity					= 45;
 				RatioForMaxOpacity			= 15;
 				TouchedOpacityPercent		= 60;
-				DrawLevelRows				= true;
+				DrawLevelRows				= false;
 				ShowLabels					= true;
 				ShowTouchedZones			= true;
 				ExtendMode					= IdcExtendMode.LastBar;
@@ -123,6 +124,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					zones.Clear();
 					lastAnalyzedBar	= -1;
 					nextZoneId		= 0;
+					pendingAlerts.Clear();
 				}
 			}
 			else if (State == State.Historical)
@@ -130,6 +132,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				calculateWarning = Calculate != Calculate.OnEachTick;
 				if (calculateWarning)
 					Log(Name + ": set Calculate to 'On each tick' for correct footprint data.", LogLevel.Warning);
+			}
+			else if (State == State.Realtime)
+			{
+				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
+				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+					lock (sync)
+						AnalyzeClosedBars(CurrentBar);
 			}
 			else if (State == State.Terminated)
 			{
@@ -158,12 +167,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 			lock (sync)
 			{
-				while (lastAnalyzedBar < closed)
-				{
-					lastAnalyzedBar++;
-					if (lastAnalyzedBar >= Count - MaxBarsBack)
-						AnalyzeBar(lastAnalyzedBar);
-				}
+				AnalyzeClosedBars(closed);
 
 				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
 				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
@@ -176,6 +180,32 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				ConfirmPending(closed);
 				Prune();
 			}
+			FlushAlerts();
+		}
+
+		private void AnalyzeClosedBars(int closed)
+		{
+			while (lastAnalyzedBar < closed)
+			{
+				lastAnalyzedBar++;
+				if (lastAnalyzedBar >= Count - MaxBarsBack)
+					AnalyzeBar(lastAnalyzedBar);
+			}
+		}
+
+		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
+		private void FlushAlerts()
+		{
+			List<IdcPendingAlert> copy;
+			lock (sync)
+			{
+				if (pendingAlerts.Count == 0)
+					return;
+				copy = new List<IdcPendingAlert>(pendingAlerts);
+				pendingAlerts.Clear();
+			}
+			foreach (IdcPendingAlert a in copy)
+				Alert(a.Id, a.Priority, a.Message, a.Sound, a.RearmSeconds, a.BackBrush, a.ForeBrush);
 		}
 
 		#region Detection
@@ -226,11 +256,21 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (volume <= 0 || volume < MinLevelVolume)
 				return false;
 
-			double opposite = buySide ? fp.Bid(tick - step) : fp.Ask(tick + step);
+			// the diagonal partner must lie inside the bar: the lowest ask / highest bid have nothing to compare with
+			long partner = buySide ? tick - step : tick + step;
+			if (partner < fp.LowTick || partner > fp.HighTick)
+				return false;
+
+			double opposite = buySide ? fp.Bid(partner) : fp.Ask(partner);
 			if (opposite <= 0)
 			{
 				if (ZeroHandling == IdcZeroHandling.Skip)
 					return false;
+				if (ZeroHandling == IdcZeroHandling.CountAsMinRatio)
+				{
+					ratio = MinImbalanceRatio;
+					return true;
+				}
 				opposite = 1;
 			}
 
@@ -249,7 +289,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (OnlyBeyondClose)
 			{
 				// buy stacks are support only when they sit below the close, sell stacks resistance only above it
-				if (buySide && highTick >= engine.ToTick(close))
+				if (buySide && highTick + step - 1 >= engine.ToTick(close))
 					return;
 				if (!buySide && lowTick <= engine.ToTick(close))
 					return;
@@ -301,8 +341,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						Instrument.FullName, zone.IsSupport ? "support" : "resistance",
 						Instrument.MasterInstrument.FormatPrice(bottom), Instrument.MasterInstrument.FormatPrice(top),
 						IdcDraw.Ratio(zone.Ratio), IdcDraw.Volume(zone.Volume));
-					Alert("IDCImb" + zone.Id, Priority.Medium, message, SoundPath(AlertSound), AlertRearmSeconds,
-						zone.IsSupport ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
+					pendingAlerts.Add(new IdcPendingAlert { Id = "IDCImb" + zone.Id, Priority = Priority.Medium, Message = message,
+						Sound = IdcSound.Resolve(AlertSound), RearmSeconds = AlertRearmSeconds,
+						BackBrush = zone.IsSupport ? Brushes.DarkGreen : Brushes.DarkRed, ForeBrush = Brushes.White });
 				}
 			}
 		}
@@ -331,14 +372,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				zones.RemoveAt(0);
 		}
 
-		private static string SoundPath(string file)
-		{
-			if (string.IsNullOrWhiteSpace(file))
-				return string.Empty;
-			if (System.IO.Path.IsPathRooted(file))
-				return file;
-			return System.IO.Path.Combine(NinjaTrader.Core.Globals.InstallDir, "sounds", file);
-		}
 		#endregion
 
 		#region Rendering
@@ -376,7 +409,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					{
 						IsSupport = zone.IsSupport, LowTick = zone.LowTick, HighTick = zone.HighTick, Step = zone.Step,
 						StartBar = zone.StartBar, EndBar = zone.EndBar, Ratio = zone.Ratio, Volume = zone.Volume,
-						Pending = zone.Pending, Levels = new List<long>(zone.Levels)
+						Pending = zone.Pending, Levels = DrawLevelRows ? new List<long>(zone.Levels) : null
 					});
 				}
 			}
@@ -399,6 +432,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					double	priceBottom	= engine.ToPrice(zone.LowTick) - tick * 0.5;
 					float	yTop		= chartScale.GetYByValue(priceTop);
 					float	yBottom		= chartScale.GetYByValue(priceBottom);
+					if (yBottom < ChartPanel.Y || yTop > ChartPanel.Y + ChartPanel.H)
+						continue;	// vertically off-screen
 					if (yBottom - yTop < 1)
 						yBottom = yTop + 1;
 
@@ -413,10 +448,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 					System.Windows.Media.Brush baseBrush = zone.IsSupport ? SupportBrush : ResistanceBrush;
 					SharpDX.Direct2D1.Brush fill	= dxBrushes.Get(RenderTarget, baseBrush, opacity);
-					SharpDX.Direct2D1.Brush edge	= dxBrushes.Get(RenderTarget, baseBrush, Math.Min(1.0, opacity * 2.2));
+					SharpDX.Direct2D1.Brush edge	= dxBrushes.Get(RenderTarget, baseBrush, Math.Min(1.0, opacity * 1.35 + 0.04));
 
 					float rowHeight = Math.Abs(chartScale.GetYByValue(priceBottom) - chartScale.GetYByValue(priceBottom + tick * zone.Step));
-					if (DrawLevelRows && rowHeight >= 4 && zone.Levels.Count > 1)
+					if (DrawLevelRows && zone.Levels != null && rowHeight >= 4 && zone.Levels.Count > 1)
 					{
 						foreach (long level in zone.Levels)
 						{
@@ -434,9 +469,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					if (textFormat != null)
 					{
 						string label = IdcDraw.Ratio(zone.Ratio) + " | " + IdcDraw.Volume(zone.Volume);
-						SharpDX.Size2F size = IdcDraw.Measure(textFormat, label);
-						if (x2 - x1 >= size.Width + 8 && yBottom - yTop >= size.Height * 0.8f)
-							IdcDraw.Text(RenderTarget, textFormat, label, x2 - 5, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleRight);
+						IdcDraw.TextIfFits(RenderTarget, textFormat, label, x2 - 5, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleRight,
+							x2 - x1 - 8, (yBottom - yTop) / 0.8f);
 					}
 				}
 

@@ -91,7 +91,11 @@ namespace SimTest
 			int markers = data.Values.Count(d => R.Get(d, "Buy") != null) + data.Values.Count(d => R.Get(d, "Sell") != null);
 			c.Note("barData {0} bars, markers {1}, engine bars {2}", data.Count, markers, EngineBars(sim.I));
 			c.Check(markers > 0, "random market produced heavy-absorption markers");
-			c.Check(data.Count <= sim.I.MaxBarsBack + 210, "barData bounded (" + data.Count + ")");
+			// closed bars keep only their markers: bars without a marker are dropped, per-price volumes are released
+			int withMarker = data.Values.Count(d => R.Get(d, "Buy") != null || R.Get(d, "Sell") != null);
+			c.Check(data.Count <= withMarker + 2, "closed bars without markers released (" + data.Count + " entries, " + withMarker + " with markers)");
+			int openLevels = data.Values.Count(d => R.Get(d, "BuyVolume") != null);
+			c.Check(openLevels <= 2, "per-price volumes released after bar close (" + openLevels + " still held)");
 			c.Check(EngineBars(sim.I) <= 10 + 260, "footprint store bounded");
 			double perBar = markers / (double)Math.Min(sim.Bars.Count, sim.I.MaxBarsBack);
 			c.Note("markers per bar {0:0.00}", perBar);

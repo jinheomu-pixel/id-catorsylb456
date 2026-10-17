@@ -62,7 +62,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		/// <summary>No imbalance when the opposite side traded nothing.</summary>
 		Skip,
 		/// <summary>Treat zero as 1 contract, so ratio = volume / 1.</summary>
-		CountAsOne
+		CountAsOne,
+		/// <summary>Zero opposite volume counts as an imbalance at exactly the minimum ratio (matches the original's labels).</summary>
+		CountAsMinRatio
 	}
 
 	/// <summary>Volume traded at one price level of one bar.</summary>
@@ -465,6 +467,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					double price	= ToPrice(t);
 					double ask		= data.GetAskVolumeForPrice(price);
 					double bid		= data.GetBidVolumeForPrice(price);
+					if (isCrypto)
+					{
+						ask = Convert.ToDouble(NinjaTrader.Core.Globals.ToCryptocurrencyVolume((long)ask));
+						bid = Convert.ToDouble(NinjaTrader.Core.Globals.ToCryptocurrencyVolume((long)bid));
+					}
 					if (ask > 0 || bid > 0)
 						fp.Add(t, ask, bid);
 				}
@@ -500,6 +507,17 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		/// forming, except on historical bars without Tick Replay, where NinjaTrader calls OnBarUpdate once per
 		/// finished bar (the very last loaded bar may still be forming, so it is left for realtime).
 		/// </summary>
+		/// <summary>
+		/// True when a time-based bar has certainly finished: its close timestamp lies in the past. Used when realtime starts
+		/// while the market is closed (evening, weekend), so the last loaded bar is not left waiting for a tick that never comes.
+		/// </summary>
+		public static bool IsBarComplete(Bars bars, int index)
+		{
+			if (bars == null || index < 0 || index >= bars.Count || bars.BarsType == null || !bars.BarsType.IsTimeBased)
+				return false;
+			return bars.GetTime(index) <= NinjaTrader.Core.Globals.Now;
+		}
+
 		public static int LastClosedBar(State state, bool tickReplay, int currentBar, int count)
 		{
 			if (state == State.Historical && !tickReplay)
@@ -634,6 +652,39 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 	public enum IdcTextAnchor { TopLeft, TopCenter, TopRight, MiddleLeft, Center, MiddleRight, BottomLeft, BottomCenter, BottomRight }
 
+	/// <summary>Alert sound path resolution that never throws (a bad path must not disable an indicator).</summary>
+	public static class IdcSound
+	{
+		public static string Resolve(string file)
+		{
+			if (string.IsNullOrWhiteSpace(file))
+				return string.Empty;
+			file = file.Trim().Trim('"').Trim();	// Explorer's "Copy as path" adds quotes
+			try
+			{
+				if (System.IO.Path.IsPathRooted(file))
+					return file;
+				return System.IO.Path.Combine(NinjaTrader.Core.Globals.InstallDir, "sounds", file);
+			}
+			catch (ArgumentException)
+			{
+				return string.Empty;	// alert without sound
+			}
+		}
+	}
+
+	/// <summary>An alert collected while a lock is held and raised after it is released.</summary>
+	public sealed class IdcPendingAlert
+	{
+		public string						Id;
+		public Priority						Priority;
+		public string						Message;
+		public string						Sound;
+		public int							RearmSeconds;
+		public System.Windows.Media.Brush	BackBrush;
+		public System.Windows.Media.Brush	ForeBrush;
+	}
+
 	/// <summary>Static rendering and formatting helpers.</summary>
 	public static class IdcDraw
 	{
@@ -687,6 +738,37 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 				rt.DrawTextLayout(new SharpDX.Vector2(x + dx, y + dy), layout, brush, SharpDX.Direct2D1.DrawTextOptions.NoSnap);
 				return new SharpDX.Size2F(w, h);
+			}
+		}
+
+		/// <summary>Draws text anchored at (x, y) only when it fits in maxWidth x maxHeight. One TextLayout per call.</summary>
+		public static bool TextIfFits(SharpDX.Direct2D1.RenderTarget rt, SharpDX.DirectWrite.TextFormat format, string text,
+			float x, float y, SharpDX.Direct2D1.Brush brush, IdcTextAnchor anchor, float maxWidth, float maxHeight)
+		{
+			if (rt == null || format == null || string.IsNullOrEmpty(text) || brush == null)
+				return false;
+
+			using (SharpDX.DirectWrite.TextLayout layout = new SharpDX.DirectWrite.TextLayout(NinjaTrader.Core.Globals.DirectWriteFactory, text, format, 2000f, 500f))
+			{
+				float w = layout.Metrics.Width;
+				float h = layout.Metrics.Height;
+				if (w > maxWidth || h > maxHeight)
+					return false;
+
+				float dx = 0, dy = 0;
+				switch (anchor)
+				{
+					case IdcTextAnchor.TopCenter:		dx = -w / 2;					break;
+					case IdcTextAnchor.TopRight:		dx = -w;						break;
+					case IdcTextAnchor.MiddleLeft:		dy = -h / 2;					break;
+					case IdcTextAnchor.Center:			dx = -w / 2;	dy = -h / 2;	break;
+					case IdcTextAnchor.MiddleRight:		dx = -w;		dy = -h / 2;	break;
+					case IdcTextAnchor.BottomLeft:		dy = -h;						break;
+					case IdcTextAnchor.BottomCenter:	dx = -w / 2;	dy = -h;		break;
+					case IdcTextAnchor.BottomRight:		dx = -w;		dy = -h;		break;
+				}
+				rt.DrawTextLayout(new SharpDX.Vector2(x + dx, y + dy), layout, brush, SharpDX.Direct2D1.DrawTextOptions.NoSnap);
+				return true;
 			}
 		}
 

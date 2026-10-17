@@ -82,10 +82,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		private sealed class BarData
 		{
-			public readonly Dictionary<long, double>	BuyVolume	= new Dictionary<long, double>();
-			public readonly Dictionary<long, double>	SellVolume	= new Dictionary<long, double>();
-			public Marker								Buy;
-			public Marker								Sell;
+			// per-price volumes are only needed while the bar forms; they are released when it closes
+			public Dictionary<long, double>	BuyVolume	= new Dictionary<long, double>();
+			public Dictionary<long, double>	SellVolume	= new Dictionary<long, double>();
+			public Marker					Buy;
+			public Marker					Sell;
+			public bool						SeenRealtime;
 		}
 
 		private readonly object						sync		= new object();
@@ -98,6 +100,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private bool								hasPending;
 		private int									lastClosedBar	= -1;
 		private int									lastPruneBar	= -1;
+		private int									firstStatsBar	= -1;
+		private readonly List<IdcPendingAlert>		pendingAlerts	= new List<IdcPendingAlert>();
 		private bool								calculateWarning;
 
 		protected override void OnStateChange()
@@ -156,6 +160,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					hasPending		= false;
 					lastClosedBar	= -1;
 					lastPruneBar	= -1;
+					firstStatsBar	= -1;
+					pendingAlerts.Clear();
 				}
 			}
 			else if (State == State.Historical)
@@ -163,6 +169,17 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				calculateWarning = Calculate != Calculate.OnEachTick;
 				if (calculateWarning)
 					Log(Name + ": set Calculate to 'On each tick' so prints are assigned to the right bar.", LogLevel.Warning);
+			}
+			else if (State == State.Realtime)
+			{
+				// market closed (evening / weekend): close the last loaded bar now instead of waiting for a tick
+				if (engine != null && IdcBars.IsBarComplete(Bars, CurrentBar))
+					lock (sync)
+						while (lastClosedBar < CurrentBar)
+						{
+							lastClosedBar++;
+							OnBarClosed(lastClosedBar);
+						}
 			}
 			else if (State == State.Terminated)
 			{
@@ -204,6 +221,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						pending.Tick		= trade.Tick;
 						pending.Price		= trade.Price;
 					}
+					PreviewPending();
 					return;
 				}
 
@@ -213,6 +231,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				pendingLargestPart	= trade.Volume;
 				hasPending			= true;
 				AddLevelVolume(trade);
+				PreviewPending();
 			}
 		}
 
@@ -233,9 +252,26 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (CurrentBar - lastPruneBar >= 200)
 				{
 					lastPruneBar = CurrentBar;
-					Prune(CurrentBar - MaxBarsBack);
+					// markers are small once their bar closed: keep them much longer than the print window
+					Prune(CurrentBar - Math.Max(MaxBarsBack, 100000));
 				}
 			}
+			FlushAlerts();
+		}
+
+		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
+		private void FlushAlerts()
+		{
+			List<IdcPendingAlert> copy;
+			lock (sync)
+			{
+				if (pendingAlerts.Count == 0)
+					return;
+				copy = new List<IdcPendingAlert>(pendingAlerts);
+				pendingAlerts.Clear();
+			}
+			foreach (IdcPendingAlert a in copy)
+				Alert(a.Id, a.Priority, a.Message, a.Sound, a.RearmSeconds, a.BackBrush, a.ForeBrush);
 		}
 
 		#region Detection
@@ -253,7 +289,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private void AddLevelVolume(IdcTrade trade)
 		{
 			BarData data = GetBarData(trade.BarIndex);
+			if (State == State.Realtime)
+				data.SeenRealtime = true;
 			Dictionary<long, double> side = trade.Side > 0 ? data.BuyVolume : data.SellVolume;
+			if (side == null)
+				return;		// bar already closed
 			double v;
 			side.TryGetValue(trade.Tick, out v);
 			side[trade.Tick] = v + trade.Volume;
@@ -266,18 +306,46 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			EvaluatePrint(trade);
 		}
 
+		/// <summary>
+		/// A print is heavy at or above mean + k * standard deviation of the window (and strictly above the mean, so a
+		/// window of identical prints marks nothing). The window counts as ready once it holds MinPopulation prints, or
+		/// a full lookback of bars with at least 30 prints (thin instruments, 1-tick charts).
+		/// </summary>
+		private bool Qualifies(IdcTrade print)
+		{
+			bool ready = stats.Count >= MinPopulation
+				|| (stats.Count >= 30 && firstStatsBar >= 0 && print.BarIndex - firstStatsBar >= LookbackBars);
+			return ready && print.Volume >= stats.Threshold(StdDevMultiplier) && print.Volume > stats.Mean;
+		}
+
 		/// <summary>Tests one (possibly grouped) print against the adaptive threshold, then adds it to the statistics.</summary>
 		private void EvaluatePrint(IdcTrade print)
 		{
-			bool ready		= stats.Count >= MinPopulation;
-			double limit	= stats.Threshold(StdDevMultiplier);
-			bool qualifies	= ready && print.Volume >= limit && print.Volume > stats.Mean && print.Volume >= MinVolume;
+			if (firstStatsBar < 0)
+				firstStatsBar = print.BarIndex;
 
+			bool qualifies = Qualifies(print);
 			stats.Add(print.BarIndex, print.Volume);
-
 			if (!qualifies)
 				return;
 
+			Marker marker = PlaceMarker(print);
+			marker.QualifyingVolume += print.Volume;
+			RefreshDisplay(GetBarData(print.BarIndex));
+		}
+
+		/// <summary>SameTimestamp grouping: show the circle of a heavy sweep at once instead of when the next trade arrives.</summary>
+		private void PreviewPending()
+		{
+			if (!hasPending || !Qualifies(pending))
+				return;
+			PlaceMarker(pending);
+			RefreshDisplay(GetBarData(pending.BarIndex));
+		}
+
+		/// <summary>Creates the bar's marker for the print's side, or moves it to a larger print's price.</summary>
+		private Marker PlaceMarker(IdcTrade print)
+		{
 			BarData data	= GetBarData(print.BarIndex);
 			Marker marker	= print.Side > 0 ? data.Buy : data.Sell;
 			if (marker == null)
@@ -293,9 +361,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				marker.Tick			= print.Tick;
 				marker.LargestPrint	= print.Volume;
 			}
-
-			marker.QualifyingVolume += print.Volume;
-			RefreshDisplay(data);
+			return marker;
 		}
 
 		private void RefreshDisplay(BarData data)
@@ -310,8 +376,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		{
 			if (LabelMode == IdcAbsorptionLabel.QualifyingVolume)
 				return marker.QualifyingVolume;
+			Dictionary<long, double> side = marker.Side > 0 ? data.BuyVolume : data.SellVolume;
+			if (side == null)
+				return marker.DisplayValue;		// bar closed, value is final
 			double v;
-			(marker.Side > 0 ? data.BuyVolume : data.SellVolume).TryGetValue(marker.Tick, out v);
+			side.TryGetValue(marker.Tick, out v);
 			return Math.Max(v, marker.LargestPrint);
 		}
 
@@ -323,22 +392,33 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				hasPending = false;
 			}
 
-			if (!AlertOnBarClose || State != State.Realtime)
-				return;
-
 			BarData data;
 			if (!barData.TryGetValue(bar, out data))
 				return;
 
-			foreach (Marker marker in new[] { data.Buy, data.Sell })
+			// only bars that actually traded in realtime alert (no stale alerts after a session break)
+			if (AlertOnBarClose && State == State.Realtime && data.SeenRealtime)
 			{
-				if (marker == null)
-					continue;
-				string message = string.Format("{0}: heavy {1} absorption {2} @ {3}", Instrument.FullName,
-					marker.Side > 0 ? "BUY" : "SELL", IdcDraw.Volume(marker.DisplayValue),
-					Instrument.MasterInstrument.FormatPrice(engine.ToPrice(marker.Tick)));
-				Alert("IDCHeavyAbs" + (marker.Side > 0 ? "B" : "S") + bar, Priority.Medium, message, SoundPath(AlertSound), 0,
-					marker.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, Brushes.White);
+				foreach (Marker marker in new[] { data.Buy, data.Sell })
+				{
+					if (marker == null || marker.DisplayValue < MinVolume)
+						continue;
+					string message = string.Format("{0}: heavy {1} absorption {2} @ {3}", Instrument.FullName,
+						marker.Side > 0 ? "BUY" : "SELL", IdcDraw.Volume(marker.DisplayValue),
+						Instrument.MasterInstrument.FormatPrice(engine.ToPrice(marker.Tick)));
+					pendingAlerts.Add(new IdcPendingAlert { Id = "IDCHeavyAbs" + (marker.Side > 0 ? "B" : "S") + bar, Priority = Priority.Medium,
+						Message = message, Sound = IdcSound.Resolve(AlertSound), RearmSeconds = 0,
+						BackBrush = marker.Side > 0 ? Brushes.DarkGreen : Brushes.DarkRed, ForeBrush = Brushes.White });
+				}
+			}
+
+			// the bar is final: drop its per-price volumes, keep only the markers
+			if (data.Buy == null && data.Sell == null)
+				barData.Remove(bar);
+			else
+			{
+				data.BuyVolume	= null;
+				data.SellVolume	= null;
 			}
 		}
 
@@ -358,14 +438,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					barData.Remove(key);
 		}
 
-		private static string SoundPath(string file)
-		{
-			if (string.IsNullOrWhiteSpace(file))
-				return string.Empty;
-			if (System.IO.Path.IsPathRooted(file))
-				return file;
-			return System.IO.Path.Combine(NinjaTrader.Core.Globals.InstallDir, "sounds", file);
-		}
 		#endregion
 
 		#region Rendering
@@ -380,10 +452,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (IsInHitTest || engine == null || ChartBars == null || dxBrushes == null || RenderTarget == null)
 				return;
 
-			int fromIndex	= ChartBars.FromIndex;
+			// include a few bars left of the view: their circles can still reach into the panel
+			int pad			= (int)Math.Ceiling(Math.Max(MinDiameter, MaxDiameter) / 2.0 / Math.Max(1.0, chartControl.Properties.BarDistance)) + 1;
+			int fromIndex	= Math.Max(0, ChartBars.FromIndex - pad);
 			int toIndex		= ChartBars.ToIndex;
 
 			List<Marker> visible = new List<Marker>();
+			double unit;
 			lock (sync)
 			{
 				for (int bar = fromIndex; bar <= toIndex; bar++)
@@ -391,11 +466,14 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					BarData data;
 					if (!barData.TryGetValue(bar, out data))
 						continue;
-					if (data.Buy != null)
+					// optional floor: hide smaller markers
+					if (data.Buy != null && data.Buy.DisplayValue >= MinVolume)
 						visible.Add(new Marker { Bar = bar, Side = 1, Tick = data.Buy.Tick, DisplayValue = data.Buy.DisplayValue });
-					if (data.Sell != null)
+					if (data.Sell != null && data.Sell.DisplayValue >= MinVolume)
 						visible.Add(new Marker { Bar = bar, Side = -1, Tick = data.Sell.Tick, DisplayValue = data.Sell.DisplayValue });
 				}
+				// absolute sizing is expressed in "typical NQ prints" (mean about 2.5) so it carries over to ES, stocks and crypto
+				unit = stats != null && stats.Count > 0 ? Math.Max(1e-9, stats.Mean / 2.5) : 1.0;
 			}
 
 			SharpDX.Direct2D1.Brush textBrush = dxBrushes.Get(RenderTarget, TextBrush, 1.0);
@@ -417,7 +495,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					{
 						double	diameter;
 						if (CircleSizing == IdcCircleSizing.Absolute)
-							diameter = Math.Min(MaxDiameter, MinDiameter + SizeFactor * Math.Sqrt(Math.Max(0, m.DisplayValue)));
+							diameter = Math.Min(MaxDiameter, MinDiameter + SizeFactor * Math.Sqrt(Math.Max(0, m.DisplayValue) / unit));
 						else
 							diameter = MinDiameter + (MaxDiameter - MinDiameter) * (maxValue > 0 ? Math.Sqrt(Math.Max(0, m.DisplayValue) / maxValue) : 1);
 						float	radius		= (float)(Math.Max(MinDiameter, diameter) / 2.0);
@@ -476,7 +554,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		public int MinPopulation { get; set; }
 
 		[Range(0, double.MaxValue)]
-		[Display(Name = "Min volume filter", Description = "Optional floor: prints smaller than this never qualify (0 = off).", Order = 4, GroupName = "1. Detection")]
+		[Display(Name = "Min volume filter", Description = "Optional floor: markers whose volume is below this are hidden (0 = off).", Order = 4, GroupName = "1. Detection")]
 		public double MinVolume { get; set; }
 
 		[Display(Name = "Print grouping", Description = "Individual prints, or prints with the same timestamp and side summed into one order.", Order = 5, GroupName = "1. Detection")]
@@ -538,20 +616,20 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		public int MinDiameter { get; set; }
 
 		[Range(0, 20)]
-		[Display(Name = "Size factor (absolute)", Description = "Pixels added per square root of volume.", Order = 7, GroupName = "3. Display")]
+		[Display(Name = "Size factor (absolute)", Description = "Pixels added per square root of volume (volume measured in typical prints of the instrument).", Order = 8, GroupName = "3. Display")]
 		public double SizeFactor { get; set; }
 
 		[Range(4, 300)]
-		[Display(Name = "Max diameter (px)", Order = 7, GroupName = "3. Display")]
+		[Display(Name = "Max diameter (px)", Order = 9, GroupName = "3. Display")]
 		public int MaxDiameter { get; set; }
 
-		[Display(Name = "Show volume text", Order = 8, GroupName = "3. Display")]
+		[Display(Name = "Show volume text", Order = 10, GroupName = "3. Display")]
 		public bool ShowText { get; set; }
 
-		[Display(Name = "Text font", Order = 9, GroupName = "3. Display")]
+		[Display(Name = "Text font", Order = 11, GroupName = "3. Display")]
 		public SimpleFont TextFont { get; set; }
 
-		[Display(Name = "Show data warnings", Order = 10, GroupName = "3. Display")]
+		[Display(Name = "Show data warnings", Order = 12, GroupName = "3. Display")]
 		public bool ShowWarnings { get; set; }
 
 		[Display(Name = "Alert on bar close", Description = "Alert when a closed bar carries a heavy absorption marker.", Order = 1, GroupName = "4. Alerts")]
