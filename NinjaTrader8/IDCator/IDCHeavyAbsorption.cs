@@ -59,6 +59,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		QualifyingVolume
 	}
 
+	/// <summary>How Heavy Absorption circle sizes are derived from volume.</summary>
+	public enum IdcCircleSizing
+	{
+		/// <summary>Diameter = min + factor * sqrt(volume), capped at max (stable size, as seen in the original's videos).</summary>
+		Absolute,
+		/// <summary>Diameter scales by sqrt(volume / largest visible marker) between min and max.</summary>
+		RelativeToVisible
+	}
+
 	public class IDCHeavyAbsorption : Indicator
 	{
 		private sealed class Marker
@@ -122,8 +131,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				TextBrush					= Brushes.White;
 				FillOpacity					= 30;
 				RingOpacity					= 60;
-				MinDiameter					= 18;
-				MaxDiameter					= 48;
+				CircleSizing				= IdcCircleSizing.Absolute;
+				MinDiameter					= 16;
+				SizeFactor					= 1.5;
+				MaxDiameter					= 64;
 				ShowText					= true;
 				TextFont					= new SimpleFont("Arial", 10) { Bold = true };
 				ShowWarnings				= true;
@@ -404,8 +415,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				{
 					foreach (Marker m in visible)
 					{
-						double	scale		= maxValue > 0 ? Math.Sqrt(Math.Max(0, m.DisplayValue) / maxValue) : 1;
-						float	radius		= (float)((MinDiameter + (MaxDiameter - MinDiameter) * scale) / 2.0);
+						double	diameter;
+						if (CircleSizing == IdcCircleSizing.Absolute)
+							diameter = Math.Min(MaxDiameter, MinDiameter + SizeFactor * Math.Sqrt(Math.Max(0, m.DisplayValue)));
+						else
+							diameter = MinDiameter + (MaxDiameter - MinDiameter) * (maxValue > 0 ? Math.Sqrt(Math.Max(0, m.DisplayValue) / maxValue) : 1);
+						float	radius		= (float)(Math.Max(MinDiameter, diameter) / 2.0);
 						float	x			= chartControl.GetXByBarIndex(ChartBars, m.Bar);
 						float	y			= chartScale.GetYByValue(engine.ToPrice(m.Tick));
 						System.Windows.Media.Brush color = m.Side > 0 ? BullBrush : BearBrush;
@@ -515,12 +530,19 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		[Display(Name = "Ring opacity %", Order = 5, GroupName = "3. Display")]
 		public int RingOpacity { get; set; }
 
+		[Display(Name = "Circle sizing", Description = "Absolute: min + factor * sqrt(volume). Relative: sqrt(volume / largest visible marker) between min and max.", Order = 6, GroupName = "3. Display")]
+		public IdcCircleSizing CircleSizing { get; set; }
+
 		[Range(4, 200)]
-		[Display(Name = "Min diameter (px)", Order = 6, GroupName = "3. Display")]
+		[Display(Name = "Min diameter (px)", Order = 7, GroupName = "3. Display")]
 		public int MinDiameter { get; set; }
 
+		[Range(0, 20)]
+		[Display(Name = "Size factor (absolute)", Description = "Pixels added per square root of volume.", Order = 7, GroupName = "3. Display")]
+		public double SizeFactor { get; set; }
+
 		[Range(4, 300)]
-		[Display(Name = "Max diameter (px)", Description = "Diameter of the largest visible marker; others scale by square root of volume.", Order = 7, GroupName = "3. Display")]
+		[Display(Name = "Max diameter (px)", Order = 7, GroupName = "3. Display")]
 		public int MaxDiameter { get; set; }
 
 		[Display(Name = "Show volume text", Order = 8, GroupName = "3. Display")]

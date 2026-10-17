@@ -95,7 +95,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				LabelBrush					= new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
 				LabelBrush.Freeze();
 				MinOpacity					= 7;
-				MaxOpacity					= 40;
+				MaxOpacity					= 45;
 				RatioForMaxOpacity			= 15;
 				TouchedOpacityPercent		= 60;
 				DrawLevelRows				= true;
@@ -417,17 +417,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					else
 						RenderTarget.FillRectangle(new SharpDX.RectangleF(x1, yTop, x2 - x1, yBottom - yTop), fill);
 
-					RenderTarget.DrawLine(new SharpDX.Vector2(x1, yTop), new SharpDX.Vector2(x2, yTop), edge, 1f);
-					RenderTarget.DrawLine(new SharpDX.Vector2(x1, yBottom), new SharpDX.Vector2(x2, yBottom), edge, 1f);
+					RenderTarget.DrawRectangle(new SharpDX.RectangleF(x1, yTop, x2 - x1, yBottom - yTop), edge, 1f);
 
+					// like the original, the label is only drawn when it fits inside the zone
 					if (textFormat != null)
 					{
 						string label = IdcDraw.Ratio(zone.Ratio) + " | " + IdcDraw.Volume(zone.Volume);
 						SharpDX.Size2F size = IdcDraw.Measure(textFormat, label);
-						if (x2 - x1 > size.Width + 6)
-							IdcDraw.Text(RenderTarget, textFormat, label, x2 - 4, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleRight);
-						else
-							IdcDraw.Text(RenderTarget, textFormat, label, x2 + 3, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleLeft);
+						if (x2 - x1 >= size.Width + 8 && yBottom - yTop >= size.Height * 0.8f)
+							IdcDraw.Text(RenderTarget, textFormat, label, x2 - 5, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleRight);
 					}
 				}
 

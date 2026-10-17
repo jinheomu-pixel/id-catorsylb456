@@ -169,14 +169,16 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				MaxZones					= 600;
 
 				PrimaryZoneBrush			= Brushes.Orange;
-				SecondaryZoneBrush			= Brushes.CornflowerBlue;
-				ZoneOpacity					= 22;
+				SecondaryZoneBrush			= new SolidColorBrush(Color.FromRgb(0x6E, 0x7D, 0xA0));
+				SecondaryZoneBrush.Freeze();
+				ZoneOpacity					= 20;
 				TouchedOpacityPercent		= 70;
 				ShowTouchedZones			= true;
 				ExtendMode					= IdcExtendMode.LastBar;
 				ShowPocLine					= true;
-				ExtendPoc					= false;
-				PocBrush					= Brushes.OrangeRed;
+				PocOnSecondary				= false;
+				ExtendPoc					= true;
+				PocBrush					= Brushes.Goldenrod;
 				PocWidth					= 2;
 				ShowHistogram				= true;
 				HistogramWidthPercent		= 35;
@@ -714,18 +716,25 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					System.Windows.Media.Brush color = zone.IsPrimary ? PrimaryZoneBrush : SecondaryZoneBrush;
 					RenderTarget.FillRectangle(new SharpDX.RectangleF(x1, yTop, x2 - x1, yBottom - yTop), dxBrushes.Get(RenderTarget, color, opacity));
 
-					if (ShowPocLine)
+					float yPoc = chartScale.GetYByValue(engine.ToPrice(zone.PocTick));
+					bool drawPoc = ShowPocLine && (zone.IsPrimary || PocOnSecondary);
+					if (drawPoc)
 					{
-						float	yPoc	= chartScale.GetYByValue(engine.ToPrice(zone.PocTick));
-						float	pocEnd	= ExtendPoc || zone.IsLive ? x2 : Math.Min(x2, chartControl.GetXByBarIndex(ChartBars, zone.PeriodEndBar) + halfBar);
-						if (pocEnd > x1)
-							RenderTarget.DrawLine(new SharpDX.Vector2(x1, yPoc), new SharpDX.Vector2(pocEnd, yPoc),
-								dxBrushes.Get(RenderTarget, PocBrush, zone.EndBar >= 0 ? 0.6 : 0.9), PocWidth);
+						// bright inside its own period, dimmer where it is extended forward
+						float	periodEnd	= zone.IsLive ? x2 : Math.Min(x2, chartControl.GetXByBarIndex(ChartBars, zone.PeriodEndBar) + halfBar);
+						double	fade		= zone.EndBar >= 0 ? 0.7 : 1.0;
+						if (periodEnd > x1)
+							RenderTarget.DrawLine(new SharpDX.Vector2(x1, yPoc), new SharpDX.Vector2(periodEnd, yPoc),
+								dxBrushes.Get(RenderTarget, PocBrush, 0.6 * fade), PocWidth);
+						if (ExtendPoc && x2 > periodEnd)
+							RenderTarget.DrawLine(new SharpDX.Vector2(Math.Max(x1, periodEnd), yPoc), new SharpDX.Vector2(x2, yPoc),
+								dxBrushes.Get(RenderTarget, PocBrush, 0.3 * fade), PocWidth);
 					}
 
-					if (labelFormat != null)
+					// the developing period's zones are drawn without labels, as in the original
+					if (labelFormat != null && !zone.IsLive)
 					{
-						float	yMid	= (yTop + yBottom) / 2f;
+						float	yMid	= drawPoc ? yPoc : (yTop + yBottom) / 2f;
 						float	right	= x2 - 8;
 						string	number	= IdcDraw.Volume(zone.LabelValue);
 						if (!double.IsNaN(zone.BuyShare))
@@ -866,8 +875,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		[Display(Name = "Show POC line", Order = 7, GroupName = "3. Zones")]
 		public bool ShowPocLine { get; set; }
 
-		[Display(Name = "Extend POC line", Description = "Extend the POC line with its zone instead of only across its own period.", Order = 8, GroupName = "3. Zones")]
+		[Display(Name = "Extend POC line", Description = "Continue the POC line (dimmer) with its zone after its own period.", Order = 8, GroupName = "3. Zones")]
 		public bool ExtendPoc { get; set; }
+
+		[Display(Name = "POC line on secondary zones", Description = "By default only the period's primary (orange) zone shows its POC line.", Order = 8, GroupName = "3. Zones")]
+		public bool PocOnSecondary { get; set; }
 
 		[XmlIgnore]
 		[Display(Name = "POC colour", Order = 9, GroupName = "3. Zones")]
