@@ -271,7 +271,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		{
 			bool ready		= stats.Count >= MinPopulation;
 			double limit	= stats.Threshold(StdDevMultiplier);
-			bool qualifies	= ready && print.Volume >= limit && print.Volume >= MinVolume;
+			bool qualifies	= ready && print.Volume >= limit && print.Volume > stats.Mean && print.Volume >= MinVolume;
 
 			stats.Add(print.BarIndex, print.Volume);
 

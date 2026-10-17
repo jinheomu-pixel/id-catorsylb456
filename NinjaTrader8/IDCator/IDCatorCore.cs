@@ -186,7 +186,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int											lastTickDirection;
 		private long										quoteChecks;
 		private long										syntheticHits;
+		private bool										realQuotesSeen;
 		private int											lastPrunedBar	= -1;
+		private int											firstStreamBar	= -1;
 
 		public double				TickSize			{ get; private set; }
 		/// <summary>Price levels per footprint row in ticks (Volumetric "Ticks per level"; 1 for tick data).</summary>
@@ -237,8 +239,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			lastTickDirection = 0;
 			quoteChecks = syntheticHits = 0;
 			SyntheticQuotes = false;
+			realQuotesSeen = false;
 			TradesProcessed = 0;
 			lastPrunedBar = -1;
+			firstStreamBar = -1;
 		}
 
 		/// <summary>True when the chosen source cannot deliver footprints (e.g. Volumetric requested on a non-volumetric chart).</summary>
@@ -291,14 +295,22 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			double ask		= e.Ask > 0 ? e.Ask : lastAsk;
 			double bid		= e.Bid > 0 ? e.Bid : lastBid;
 
+			// A print at or above a real ask is impossible with NinjaTrader's substitute quotes (Ask = Last + 1 tick),
+			// so it proves the quotes are real. Until then a print matching the substitute pattern is ambiguous and is
+			// classified with the tick rule, from the very first print (no 500-print warm-up, no permanent switch).
+			if (ask > 0 && bid > 0 && ask > bid && price >= ask)
+				realQuotesSeen = true;
 			DetectSyntheticQuotes(price, ask, bid);
+			bool ambiguous = !realQuotesSeen && bid > 0 && Math.Abs(bid - price) < TickSize * 0.01 && Math.Abs(ask - (bid + TickSize)) < TickSize * 0.01;
 
 			int side = 0;
-			if (!SyntheticQuotes && ask > 0 && price >= ask)
+			if (ambiguous)
+				side = TickRule(price);
+			else if (ask > 0 && price >= ask)
 				side = 1;
-			else if (!SyntheticQuotes && bid > 0 && price <= bid)
+			else if (bid > 0 && price <= bid)
 				side = -1;
-			else if (SyntheticQuotes || TickRuleForInside)
+			else if (TickRuleForInside)
 				side = TickRule(price);
 
 			if (price > lastTradePrice && lastTradePrice > 0)		lastTickDirection = 1;
@@ -313,6 +325,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			trade.Side		= side;
 			trade.Time		= e.Time;
 			TradesProcessed++;
+
+			if (firstStreamBar < 0)
+				firstStreamBar = currentBar;
 
 			if (!UsesVolumetric)
 			{
@@ -348,6 +363,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			// NinjaTrader substitutes Bid = Last and Ask = Bid + 1 tick when the provider's historical ticks carry
 			// no quotes. Real data shows that pattern only on sell prints (roughly half of all trades), synthetic
 			// data shows it on every print. Decide once enough trades were seen.
+			if (realQuotesSeen)
+			{
+				SyntheticQuotes = false;	// only drives the on-chart warning now
+				return;
+			}
 			if (SyntheticQuotes || quoteChecks >= 2000)
 				return;
 
@@ -416,6 +436,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return built;
 			}
 
+			// without Tick Replay the bar that was forming when the trade stream started only holds part of its trades
+			if (!HasTickReplay && barIndex == firstStreamBar)
+				return null;
 			IdcFootprintBar fp;
 			return tickBars.TryGetValue(barIndex, out fp) ? fp : null;
 		}
@@ -434,7 +457,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (hi - lo > 20000)
 					return null;
 
-				for (long t = lo; t <= hi; t += ticksPerLevel)
+				// Volumetric rows sit on a fixed price grid (multiples of ticks per level): start on the row that holds the
+				// low, otherwise the row holding the high is skipped whenever the low is not on the grid
+				long first = lo - (((lo % ticksPerLevel) + ticksPerLevel) % ticksPerLevel);
+				for (long t = first; t <= hi; t += ticksPerLevel)
 				{
 					double price	= ToPrice(t);
 					double ask		= data.GetAskVolumeForPrice(price);
@@ -681,9 +707,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (a >= 1000000)
 				return (v / 1000000.0).ToString(a >= 10000000 ? "0" : "0.#", ci) + "M";
 			if (a >= 10000)
-				return (v / 1000.0).ToString("0", ci) + "K";
+				return (v / 1000.0).ToString("0", ci) + "k";
 			if (a >= 1000)
-				return (v / 1000.0).ToString("0.#", ci) + "K";
+				return (v / 1000.0).ToString("0.#", ci) + "k";
 			if (a >= 10 || Math.Abs(v - Math.Round(v)) < 1e-9)
 				return Math.Round(v).ToString("0", ci);
 			return v.ToString("0.##", ci);

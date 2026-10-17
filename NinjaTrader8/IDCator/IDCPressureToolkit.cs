@@ -103,6 +103,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private double									lastPrice;
 		private double									psychStep;
 		private bool									calculateWarning;
+		private int						touchBar	= -1;
+		private double					touchHigh;
+		private double					touchLow;
 
 		protected override void OnStateChange()
 		{
@@ -257,7 +260,14 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						AnalyzeClosedBar(lastAnalyzedBar);
 				}
 
-				CheckLineTouches(CurrentBar, High[0], Low[0]);
+				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
+				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
+				{
+					touchBar	= CurrentBar;
+					touchHigh	= High[0];
+					touchLow	= Low[0];
+					CheckLineTouches(CurrentBar, High[0], Low[0]);
+				}
 				CheckPsychCross(Close[0]);
 
 				if (LiveBar && State == State.Realtime && CurrentBar > closed)
@@ -282,6 +292,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (result.Bubbles.Count > 0 || result.Dots.Count > 0 || result.BigTrades.Count > 0)
 				signals[bar] = result;
 
+			// lines use the same (previous-window) level threshold as the dot, so add them before learning from this bar
+			if (ShowAbsorption && ShowAbsorptionLines)
+				AddAbsorptionLines(fp, bar);
+
 			// learn from the closed bar only after it was judged against the previous window
 			int step = Math.Max(1, engine.LevelStep);
 			for (long t = fp.LowTick; t <= fp.HighTick; t += step)
@@ -293,9 +307,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (cell.Bid > 0) aggressiveStats.Add(bar, cell.Bid);
 				levelStats.Add(bar, cell.Total);
 			}
-
-			if (ShowAbsorption && ShowAbsorptionLines)
-				AddAbsorptionLines(fp, bar);
 
 			largePrints.Remove(bar);
 			if (liveBar == bar)
@@ -476,7 +487,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (line.EndBar >= 0 || bar <= line.Bar)
 					continue;
 				double price = engine.ToPrice(line.Tick);
-				if (low > price || high < price)
+				if (engine.ToTick(low) > line.Tick || engine.ToTick(high) < line.Tick)
 					continue;
 
 				line.EndBar = bar;
@@ -518,9 +529,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 			if (lastPrice > 0 && psychStep > 0 && State == State.Realtime && AlertPsychCross && ShowPsychLevels)
 			{
-				double lo = Math.Min(lastPrice, price), hi = Math.Max(lastPrice, price);
-				double level = Math.Ceiling(lo / psychStep - 1e-9) * psychStep;
-				if (level <= hi && level > lo - 1e-9 && lastPrice != price)
+				// the level nearest to the new price on the far side of the move: up -> highest level <= price,
+				// down -> lowest level >= price; it is crossed when the previous price was strictly on the other side
+				bool up = price > lastPrice;
+				double level = up ? Math.Floor(price / psychStep + 1e-9) * psychStep : Math.Ceiling(price / psychStep - 1e-9) * psychStep;
+				if (lastPrice != price && (up ? level > lastPrice + 1e-9 : level < lastPrice - 1e-9))
 					Alert("IDCPtkPsych" + Math.Round(level / psychStep), Priority.Low,
 						string.Format("{0}: price crossed psychological level {1}", Instrument.FullName, Instrument.MasterInstrument.FormatPrice(level)),
 						SoundPath(AlertSound), Math.Max(AlertRearmSeconds, 30), Brushes.DimGray, Brushes.White);

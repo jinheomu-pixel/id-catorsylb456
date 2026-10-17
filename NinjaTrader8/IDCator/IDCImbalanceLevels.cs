@@ -62,6 +62,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int						lastAnalyzedBar	= -1;
 		private int						nextZoneId;
 		private bool					calculateWarning;
+		private int						touchBar	= -1;
+		private double					touchHigh;
+		private double					touchLow;
 
 		protected override void OnStateChange()
 		{
@@ -162,7 +165,14 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						AnalyzeBar(lastAnalyzedBar);
 				}
 
-				CheckTouches(CurrentBar, High[0], Low[0]);
+				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
+				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
+				{
+					touchBar	= CurrentBar;
+					touchHigh	= High[0];
+					touchLow	= Low[0];
+					CheckTouches(CurrentBar, High[0], Low[0]);
+				}
 				ConfirmPending(closed);
 				Prune();
 			}
@@ -239,9 +249,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (OnlyBeyondClose)
 			{
 				// buy stacks are support only when they sit below the close, sell stacks resistance only above it
-				if (buySide && engine.ToPrice(highTick) >= close)
+				if (buySide && highTick >= engine.ToTick(close))
 					return;
-				if (!buySide && engine.ToPrice(lowTick) <= close)
+				if (!buySide && lowTick <= engine.ToTick(close))
 					return;
 			}
 
@@ -271,7 +281,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 				double top		= engine.ToPrice(zone.HighTick + zone.Step - 1);
 				double bottom	= engine.ToPrice(zone.LowTick);
-				bool touched	= zone.IsSupport ? low <= top : high >= bottom;
+				// compare in tick space: tick * TickSize can be 1 ulp above the feed price (0.1, 0.01 tick sizes)
+				bool touched	= zone.IsSupport ? engine.ToTick(low) <= zone.HighTick + zone.Step - 1 : engine.ToTick(high) >= zone.LowTick;
 				if (!touched)
 					continue;
 

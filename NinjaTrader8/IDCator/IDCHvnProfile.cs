@@ -137,6 +137,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int							lastAnalyzedBar	= -1;
 		private int							nextZoneId;
 		private bool						calculateWarning;
+		private int						touchBar	= -1;
+		private double					touchHigh;
+		private double					touchLow;
 
 		protected override void OnStateChange()
 		{
@@ -282,7 +285,14 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				if (changed && (State == State.Realtime || CurrentBar >= Count - 2))
 					BuildLiveProfile();
 
-				CheckTouches(CurrentBar, High[0], Low[0]);
+				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
+				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
+				{
+					touchBar	= CurrentBar;
+					touchHigh	= High[0];
+					touchLow	= Low[0];
+					CheckTouches(CurrentBar, High[0], Low[0]);
+				}
 
 				if (barKeys.Count > MaxBarsBack + 200)
 					PruneKeys(CurrentBar - MaxBarsBack - 50);
@@ -294,7 +304,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		{
 			if (ProfileTimeframe == IdcProfileTimeframe.Daily || ProfileTimeframe == IdcProfileTimeframe.Weekly)
 			{
-				if (Bars.IsFirstBarOfSession || tradingDay == DateTime.MinValue)
+				if (Bars.BarsType != null && !Bars.BarsType.IsIntraday)
+					tradingDay = barTime.Date;	// Day/Week bars are stamped with their trading day; IsFirstBarOfSession is always false on them
+				else if (Bars.IsFirstBarOfSession || tradingDay == DateTime.MinValue)
 				{
 					sessionIterator.GetNextSession(barTime, true);
 					tradingDay = sessionIterator.ActualTradingDayExchange.Date;
@@ -568,7 +580,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 				double top		= engine.ToPrice(zone.HighTick);
 				double bottom	= engine.ToPrice(zone.LowTick);
-				if (high < bottom || low > top)
+				if (engine.ToTick(high) < zone.LowTick || engine.ToTick(low) > zone.HighTick)
 					continue;
 
 				zone.EndBar = bar;
@@ -721,7 +733,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					if (drawPoc)
 					{
 						// bright inside its own period, dimmer where it is extended forward
-						float	periodEnd	= zone.IsLive ? x2 : Math.Min(x2, chartControl.GetXByBarIndex(ChartBars, zone.PeriodEndBar) + halfBar);
+						// short bright segment from the period start (about 6 bars, as in the original), dimmer extension after it
+						int		brightEndBar	= Math.Min(zone.PeriodEndBar, zone.StartBar + 5);
+						float	periodEnd	= Math.Min(x2, chartControl.GetXByBarIndex(ChartBars, brightEndBar) + halfBar);
 						double	fade		= zone.EndBar >= 0 ? 0.7 : 1.0;
 						if (periodEnd > x1)
 							RenderTarget.DrawLine(new SharpDX.Vector2(x1, yPoc), new SharpDX.Vector2(periodEnd, yPoc),

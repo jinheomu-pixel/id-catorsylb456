@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Behaviour-simulation harness for the IDCator NinjaTrader 8 indicators.
+
+      dotnet run (project tools/sim-test)             all scenarios (long run: 20000 bars x 50 ticks)
+      options after a double dash: quick (shorter long runs), verbose, or name filters such as HVN
+      (see Program.cs for the exact command lines)
+
+    To test a patched copy of the indicators without touching NinjaTrader8/IDCator, pass the folder as the
+    IdcSourceDir property (dotnet run with property:IdcSourceDir=/path/to/copy), see Program.cs.
+
+    The indicator sources in NinjaTrader8/IDCator are compiled AS-IS together with FakeNinjaTrader.cs,
+    a runnable stand-in for the NinjaTrader 8 API (plus minimal WPF and SharpDX fakes, so it runs on
+    Linux / net8.0 without any NuGet package). Exit code = number of failed scenarios.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>IDCatorSimTest</AssemblyName>
+    <RootNamespace>SimTest</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0067;CS0105;CS0108;CS0114;CS0168;CS0169;CS0219;CS0414;CS0436;CS0649;CS1591;CS8981;CA1416</NoWarn>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <!-- Folder with the indicator sources; override to test a patched copy (path relative to this project or absolute). -->
+    <IdcSourceDir Condition="'$(IdcSourceDir)' == ''">../../NinjaTrader8/IDCator</IdcSourceDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(IdcSourceDir)/*.cs" />
+    <Compile Include="*.cs" />
+  </ItemGroup>
+</Project>
