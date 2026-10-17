@@ -79,19 +79,22 @@ Tanpa Tick Replay dan tanpa Volumetric, indikator tetap jalan untuk data **realt
 - Minimal **3 level berturut-turut** (default) membentuk zona. Zona beli hanya dihitung kalau berada **di bawah close** (support), zona jual hanya kalau **di atas close** (resistance).
 - Zona diperpanjang ke kanan sampai harga masuk lagi ke zona, lalu berhenti di bar yang menyentuhnya.
 - Label `6.7x | 350` = rasio terkuat dalam stack | volume stack. Makin besar rasio, makin pekat warnanya (sekitar 7% di 5x sampai 40% di ≥15x).
+- Kalau sisi lawan diagonal bervolume **nol**, level itu dihitung imbalance tepat di rasio minimum (*Zero-value handling = CountAsMinRatio*). Ini sesuai label di video asli yang banyak berbunyi `5x | 8`. Level paling bawah/atas bar tidak punya pasangan diagonal, jadi tidak dihitung.
+- Label hanya digambar kalau muat di dalam zona, sama seperti aslinya.
 - Setting penting: *Min imbalance ratio* (5), *Min stacked levels* (3), *Zero-value handling*, *Discard if next bar touches* (off), *Alert on zone touch*.
 
 ### Heavy Absorption
 - Threshold statistik: **rata-rata + k × standar deviasi** ukuran transaksi dalam *Lookback bars* (default 100 bar, k = 2.0). Threshold ini otomatis naik saat pasar ramai dan turun saat sepi.
 - Satu lingkaran hijau (beli) dan/atau merah (jual) per bar, di harga transaksi terbesar. Kalau muncul transaksi yang lebih besar, lingkarannya pindah.
 - Angka di dalam lingkaran = volume agresif di harga itu, dan terus bertambah secara live. Bisa diubah ke *jumlah transaksi yang lolos threshold*.
-- Ukuran lingkaran = √volume relatif terhadap lingkaran lain yang terlihat di layar.
+- Ukuran lingkaran = diameter minimum + faktor × √volume (*Circle sizing = Absolute*, mengikuti video asli). Volume diukur relatif terhadap ukuran transaksi rata-rata instrumen, jadi tetap proporsional di NQ, ES, saham, maupun crypto. Opsi *RelativeToVisible* membandingkan dengan lingkaran lain di layar.
+- *Min volume filter* menyembunyikan lingkaran yang angkanya di bawah batas.
 - Opsi *Print grouping: SameTimestamp* menjumlahkan transaksi dengan timestamp dan sisi yang sama, mendekati "satu order besar yang menyapu beberapa harga".
 - **Butuh Tick Replay** untuk riwayat. Tanpa itu, lingkaran baru muncul sejak realtime.
 
 ### HVN Profile
 - *Profile timeframe*: 1m, 5m, 15m, 30m (default), 1h, 2h, 4h, Daily, Weekly.
-- Profil volume per periode dihaluskan (*Smoothing passes*). Baris dengan volume ≥ *HVN threshold %* dari baris tertinggi digabung menjadi cluster (*Gap tolerance*, *Min cluster size*), lalu tepinya dirapikan (*Cluster sensitivity*).
+- Profil volume per periode dihaluskan (*Smoothing passes*). Baris dengan volume ≥ *HVN threshold %* dari baris tertinggi digabung menjadi cluster (*Gap tolerance*, *Min cluster size*), lalu tepinya dirapikan (*Cluster sensitivity*: 0% = cluster utuh, 100% = hanya baris puncak).
 - Cluster terbesar di periode itu berwarna **oranye**, cluster lain **biru**. Garis **POC** menandai harga dengan volume terbesar di cluster.
 - Label `221 | 51%`: angka = volume di POC cluster (bisa diganti ke total volume cluster). Persentase = porsi sisi dominan, **hijau** kalau buyer dominan, **merah** kalau seller.
 - Zona baru bisa "tersentuh" setelah periodenya selesai (+ *Touch grace bars*), lalu berhenti di bar yang menyentuh. Ada alert sentuhan.
@@ -129,7 +132,8 @@ Tetap kombinasikan dengan analisa sendiri dan manajemen risiko, apalagi di akun 
 | *Volumetric requested but chart is not Volumetric* | Ganti *Footprint source* ke **Auto**, atau ubah Data Series ke Volumetric |
 | *historical ticks carry no bid/ask* | Data feed tidak menyimpan bid/ask historis. Indikator otomatis memakai *tick rule* (naik = beli, turun = jual) |
 | Chart lambat | Kurangi *Days to load*, kurangi *Max bars back* |
-| Alert tidak bunyi | Alert hanya aktif di realtime. File suara diambil dari folder `sounds` NinjaTrader (Alert1–4.wav) |
+| Alert tidak bunyi | Alert hanya aktif di realtime. File suara diambil dari folder `sounds` NinjaTrader (Alert1–4.wav), atau tulis path lengkap. Path yang salah tidak membuat indikator error, alert hanya jadi tanpa suara |
+| Buka chart saat market tutup (malam/weekend) | Normal. Bar terakhir yang sudah selesai tetap dianalisa saat chart dibuka |
 
 ---
 
@@ -144,6 +148,13 @@ dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bi
 ```
 
 Kode ditulis kompatibel dengan **C# 5**, karena NinjaTrader sebelum 8.1.2 hanya mendukung C# 5.
+
+Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 46 skenario: Tick Replay, Volumetric, realtime, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
+
+```bash
+dotnet run --project tools/sim-test -c Release            # semua skenario
+dotnet run --project tools/sim-test -c Release -- HVN     # filter nama
+```
 
 ---
 
