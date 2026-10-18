@@ -138,6 +138,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int							nextZoneId;
 		private bool						calculateWarning;
 		private bool						windowStarted;
+		private DateTime					lastLiveBuild	= DateTime.MinValue;
+		private const int					LiveUpdateMs	= 300;
 		private readonly List<IdcPendingAlert> pendingAlerts = new List<IdcPendingAlert>();
 		private int						touchBar	= -1;
 		private double					touchHigh;
@@ -158,7 +160,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				ScaleJustification			= ScaleJustification.Right;
 				MaximumBarsLookBack			= MaximumBarsLookBack.TwoHundredFiftySix;
 
-				ProfileTimeframe			= IdcProfileTimeframe.Minute30;
+				ProfileTimeframe			= IdcProfileTimeframe.Minute5;		// as in the vendor's NQ 15-second videos
 				RowTicks					= 0;
 				TargetRows					= 60;
 				HvnThresholdPercent			= 70;
@@ -225,6 +227,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					tradingDay		= DateTime.MinValue;
 					windowStarted	= false;
 					pendingAlerts.Clear();
+					lastLiveBuild	= DateTime.MinValue;
 				}
 			}
 			else if (State == State.Historical)
@@ -247,7 +250,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 							FinalizePeriod(current);
 							current = null;
 						}
-						BuildLiveProfile();
+						BuildLiveProfile(false);
 					}
 			}
 			else if (State == State.Terminated)
@@ -265,8 +268,26 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (engine == null)
 				return;
 			IdcTrade trade;
+			bool rebuilt = false;
 			lock (sync)		// the footprint store is also read by the analysis (OnBarUpdate, OnStateChange)
-				engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
+			{
+				bool isTrade = engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
+
+				// realtime: the developing profile follows the forming bar trade by trade (throttled on the platform clock,
+				// replay time in Playback). Runs here, after the trade was added, so the latest print is always included.
+				if (isTrade && State == State.Realtime)
+				{
+					DateTime now = NinjaTrader.Core.Globals.Now;
+					if ((now - lastLiveBuild).TotalMilliseconds >= LiveUpdateMs || now < lastLiveBuild)
+					{
+						lastLiveBuild	= now;
+						BuildLiveProfile(true);
+						rebuilt			= true;
+					}
+				}
+			}
+			if (rebuilt)
+				ForceRefresh();
 		}
 
 		protected override void OnBarUpdate()
@@ -295,8 +316,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					changed	= true;
 				}
 
-				if (changed && (State == State.Realtime || CurrentBar >= Count - 2))
-					BuildLiveProfile();
+				if (State == State.Realtime)
+				{
+					// a bar closed or a period ended: rebuild now, and let this tick's trade (OnMarketData runs right after)
+					// rebuild once more without waiting for the throttle so the new bar's first print shows at once
+					if (changed)
+					{
+						BuildLiveProfile(true);
+						lastLiveBuild = DateTime.MinValue;
+					}
+				}
+				else if (changed && CurrentBar >= Count - 2)
+					BuildLiveProfile(false);
 
 				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
 				if (CurrentBar != touchBar || High[0] > touchHigh || Low[0] < touchLow)
@@ -445,8 +476,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (current == null)
 				current = new Period { Key = key, StartBar = bar };
 			current.EndBar = bar;
+			AddBarVolumes(current, bar, true);
+		}
 
-			IdcFootprintBar fp = engine.GetBar(bar, true);
+		/// <summary>Adds one bar's volume at price to a period: footprint when available, otherwise the bar volume spread over its range.</summary>
+		private void AddBarVolumes(Period period, int bar, bool isClosed)
+		{
+			IdcFootprintBar fp = engine.GetBar(bar, isClosed);
 			if (fp != null && !fp.IsEmpty)
 			{
 				int step = Math.Max(1, engine.LevelStep);
@@ -454,9 +490,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				{
 					IdcCell cell = fp.Get(t);
 					if (cell != null)
-						current.Add(t, cell.Total, cell.Ask, cell.Bid);
+						period.Add(t, cell.Total, cell.Ask, cell.Bid);
 				}
-				current.HasSides = true;
+				period.HasSides = true;
 				return;
 			}
 
@@ -473,7 +509,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			long cells	= (hi - lo) / stride + 1;
 			double each	= volume / cells;
 			for (long t = lo; t <= hi; t += stride)
-				current.Add(t, each, 0, 0);
+				period.Add(t, each, 0, 0);
 		}
 
 		private void FinalizePeriod(Period period)
@@ -495,21 +531,45 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			PruneZones();
 		}
 
-		private void BuildLiveProfile()
+		/// <summary>
+		/// Developing (live) profile of the current period. In realtime it also contains the bar that is still forming,
+		/// so the live histogram and its zones move with every trade (rebuilt at most every LiveUpdateMs).
+		/// </summary>
+		private void BuildLiveProfile(bool includeForming)
 		{
 			liveZones.Clear();
 			liveHistogram = null;
-			if (current == null || current.Levels.Count == 0)
+
+			Period live = current;
+			long formingKey;
+			if (includeForming && CurrentBar > lastAnalyzedBar && barKeys.TryGetValue(CurrentBar, out formingKey))
+			{
+				if (current != null && current.Key == formingKey)
+					live = ClonePeriod(current);
+				else
+					live = new Period { Key = formingKey, StartBar = CurrentBar };
+				live.EndBar = CurrentBar;
+				AddBarVolumes(live, CurrentBar, false);
+			}
+			if (live == null || live.Levels.Count == 0)
 				return;
 
 			Histogram histogram;
-			List<Cluster> clusters = Analyze(current, out histogram);
+			List<Cluster> clusters = Analyze(live, out histogram);
 			if (histogram != null)
 			{
 				histogram.IsLive	= true;
 				liveHistogram		= histogram;
 			}
-			liveZones.AddRange(MakeZones(current, clusters, true));
+			liveZones.AddRange(MakeZones(live, clusters, true));
+		}
+
+		private static Period ClonePeriod(Period source)
+		{
+			Period copy = new Period { Key = source.Key, StartBar = source.StartBar, EndBar = source.EndBar, HasSides = source.HasSides };
+			foreach (KeyValuePair<long, double[]> kv in source.Levels)
+				copy.Add(kv.Key, kv.Value[0], kv.Value[1], kv.Value[2]);
+			return copy;
 		}
 
 		private List<Zone> MakeZones(Period period, List<Cluster> clusters, bool live)

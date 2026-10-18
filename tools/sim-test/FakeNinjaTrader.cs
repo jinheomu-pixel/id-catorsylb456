@@ -1003,7 +1003,9 @@ namespace NinjaTrader.Gui.NinjaScript
 
 		protected virtual void OnRender(ChartControl chartControl, ChartScale chartScale) { }
 		public virtual void OnRenderTargetChanged() { }
-		public void ForceRefresh() { }
+		public int SimForceRefreshes;
+		public readonly List<DateTime> SimForceRefreshTimes = new List<DateTime>();
+		public void ForceRefresh() { SimForceRefreshes++; SimForceRefreshTimes.Add(NinjaTrader.Core.Globals.Now); }
 		public void SetZOrder(int desiredZOrderLevel) { ZOrder = desiredZOrderLevel; }
 	}
 

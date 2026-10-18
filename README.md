@@ -68,6 +68,17 @@ Video ProfitPro memakai **NQ** dengan bar **15 detik / 30 detik**, profil HVN **
 
 Tanpa Tick Replay dan tanpa Volumetric, indikator tetap jalan untuk data **realtime** (mulai saat chart dibuka). HVN Profile juga tetap bisa menggambar riwayat dengan perkiraan dari volume bar.
 
+**Apa yang bergerak live (bar belum close)**
+
+| Indikator | Saat bar masih berjalan | Saat bar close |
+|---|---|---|
+| Imbalance Levels | Zona yang sudah ada berhenti tepat di tick yang menyentuhnya, dan alert bunyi saat itu juga | Zona baru dari bar itu muncul (sama seperti aslinya, imbalance dihitung dari bar yang sudah jadi) |
+| Heavy Absorption | Lingkaran muncul tepat di transaksi besarnya, lalu angkanya bertambah setiap ada transaksi sisi yang sama di harga itu | Nilai jadi final. Alert *on bar close* (kalau dipilih) |
+| HVN Profile | Histogram dan zona periode berjalan ikut berubah setiap transaksi (paling cepat tiap 300 ms) | Bar masuk ke profil periode. Saat periode selesai, zona final dan labelnya muncul |
+| Pressure Toolkit | Bubble, big trade, dan titik absorption bar berjalan diperbarui (paling cepat tiap 250 ms) | Sinyal final dan alert |
+
+Chart langsung digambar ulang saat ada perubahan, jadi tidak perlu menunggu tick berikutnya.
+
 ---
 
 ## 4. Penjelasan tiap indikator
@@ -93,12 +104,13 @@ Tanpa Tick Replay dan tanpa Volumetric, indikator tetap jalan untuk data **realt
 - **Butuh Tick Replay** untuk riwayat. Tanpa itu, lingkaran baru muncul sejak realtime.
 
 ### HVN Profile
-- *Profile timeframe*: 1m, 5m, 15m, 30m (default), 1h, 2h, 4h, Daily, Weekly.
+- *Profile timeframe*: 1m, 5m (default, sama seperti di video: chart NQ 15 detik dengan node per 5 menit), 15m, 30m, 1h, 2h, 4h, Daily, Weekly.
 - Profil volume per periode dihaluskan (*Smoothing passes*). Baris dengan volume ≥ *HVN threshold %* dari baris tertinggi digabung menjadi cluster (*Gap tolerance*, *Min cluster size*), lalu tepinya dirapikan (*Cluster sensitivity*: 0% = cluster utuh, 100% = hanya baris puncak).
 - Cluster terbesar di periode itu berwarna **oranye**, cluster lain **biru**. Garis **POC** menandai harga dengan volume terbesar di cluster.
 - Label `221 | 51%`: angka = volume di POC cluster (bisa diganti ke total volume cluster). Persentase = porsi sisi dominan, **hijau** kalau buyer dominan, **merah** kalau seller.
 - Zona baru bisa "tersentuh" setelah periodenya selesai (+ *Touch grace bars*), lalu berhenti di bar yang menyentuh. Ada alert sentuhan.
 - Histogram profil per periode bisa ditampilkan atau disembunyikan. Periode yang sedang berjalan digambar lebih transparan (*Live profile opacity*).
+- Di realtime, profil periode berjalan ikut bergerak setiap transaksi, termasuk bar yang belum close (diperbarui paling cepat tiap 300 ms). Zona live belum diberi label; label muncul setelah periodenya selesai.
 
 ### Pressure Toolkit
 - **Pressure bubble**: level harga dengan volume agresif besar (≥ mean + k·σ volume per level) dan dominan dibanding sisi lawan (*Dominance ratio*). Bubble redup = lemah, terang = kuat.
@@ -149,7 +161,7 @@ dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bi
 
 Kode ditulis kompatibel dengan **C# 5**, karena NinjaTrader sebelum 8.1.2 hanya mendukung C# 5.
 
-Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 69 skenario: Tick Replay, Volumetric, realtime, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
+Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 73 skenario: Tick Replay, Volumetric, realtime (update di bar yang belum close, repaint chart, zona berhenti tepat di tick yang menyentuh), market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
 
 ```bash
 dotnet run --project tools/sim-test -c Release            # semua skenario

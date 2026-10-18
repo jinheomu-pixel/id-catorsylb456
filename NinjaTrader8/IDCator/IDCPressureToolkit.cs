@@ -93,6 +93,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int										liveBar			= -1;
 		private DateTime								lastLiveUpdate	= DateTime.MinValue;
 		private bool									liveDirty;
+		private volatile bool							renderDirty;
+		private DateTime								lastRefresh		= DateTime.MinValue;
 		private bool									sessionBreakClose;
 		private IdcFootprintEngine						engine;
 		private IdcBarWindowStats						aggressiveStats;
@@ -258,7 +260,26 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					if (liveDirty)
 						UpdateLiveBar();
 				}
+			if (State == State.Realtime)
+				RequestRefresh();
 		}
+
+		/// <summary>
+		/// Marker changes made in OnMarketData (after that tick's OnBarUpdate) are pushed to the chart right away instead of
+		/// waiting for the next tick. Throttled on the platform clock (replay time in Playback).
+		/// </summary>
+		private void RequestRefresh()
+		{
+			if (!renderDirty)
+				return;
+			DateTime now = NinjaTrader.Core.Globals.Now;
+			if (now >= lastRefresh && (now - lastRefresh).TotalMilliseconds < 200)
+				return;
+			lastRefresh	= now;
+			renderDirty	= false;
+			ForceRefresh();
+		}
+
 
 		private void RecordPrint(IdcTrade trade)
 		{
@@ -396,6 +417,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			liveDirty		= false;
 			liveSignals		= Evaluate(fp, CurrentBar);
 			liveBar			= CurrentBar;
+			renderDirty		= true;
 		}
 
 		/// <summary>First tick of the footprint row that holds the tick (Volumetric "ticks per level"; the tick itself for tick data).</summary>

@@ -80,6 +80,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			public double	PendingVolume;		// SameTimestamp sweep still being summed (preview only)
 			public double	Unit = 1;			// typical print size when the marker appeared (absolute sizing stays stable)
 			public double	DisplayValue;
+			public long		ShownTick = long.MinValue;	// price the chart last showed (repaint only on a visible change)
 		}
 
 		private sealed class BarData
@@ -104,6 +105,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int									lastPruneBar	= -1;
 		private int									firstStatsBar	= -1;
 		private readonly List<IdcPendingAlert>		pendingAlerts	= new List<IdcPendingAlert>();
+		private volatile bool						renderDirty;
+		private DateTime							lastRefresh		= DateTime.MinValue;
 		private bool								calculateWarning;
 
 		protected override void OnStateChange()
@@ -195,6 +198,29 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		}
 
 		protected override void OnMarketData(MarketDataEventArgs marketDataUpdate)
+		{
+			HandleMarketData(marketDataUpdate);
+			if (State == State.Realtime)
+				RequestRefresh();
+		}
+
+		/// <summary>
+		/// Marker changes made in OnMarketData (after that tick's OnBarUpdate) are pushed to the chart right away instead of
+		/// waiting for the next tick. Throttled on the platform clock (replay time in Playback).
+		/// </summary>
+		private void RequestRefresh()
+		{
+			if (!renderDirty)
+				return;
+			DateTime now = NinjaTrader.Core.Globals.Now;
+			if (now >= lastRefresh && (now - lastRefresh).TotalMilliseconds < 200)
+				return;
+			lastRefresh	= now;
+			renderDirty	= false;
+			ForceRefresh();
+		}
+
+		private void HandleMarketData(MarketDataEventArgs marketDataUpdate)
 		{
 			if (engine == null)
 				return;
@@ -380,9 +406,19 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private void RefreshDisplay(BarData data)
 		{
 			if (data.Buy != null)
-				data.Buy.DisplayValue = DisplayValue(data, data.Buy);
+				UpdateDisplay(data, data.Buy);
 			if (data.Sell != null)
-				data.Sell.DisplayValue = DisplayValue(data, data.Sell);
+				UpdateDisplay(data, data.Sell);
+		}
+
+		private void UpdateDisplay(BarData data, Marker marker)
+		{
+			double value = DisplayValue(data, marker);
+			if (value == marker.DisplayValue && marker.Tick == marker.ShownTick)
+				return;
+			marker.DisplayValue	= value;
+			marker.ShownTick	= marker.Tick;
+			renderDirty			= true;
 		}
 
 		private double DisplayValue(BarData data, Marker marker)
