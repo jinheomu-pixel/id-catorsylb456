@@ -317,7 +317,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
-			bool mayAlert = !IdcBars.IsStaleSessionClose(Bars, closed);
+			bool mayAlert = !IdcBars.IsStaleSessionClose(Bars, closed, engine.FeedNow());
 			// a gap from the previous close to this bar crosses every level in between
 			double high	= Math.Max(High[0], Close[1]);
 			double low	= Math.Min(Low[0], Close[1]);

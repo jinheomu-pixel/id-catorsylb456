@@ -271,31 +271,58 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		public long ToTick(double price)	{ return (long)Math.Round(price / TickSize); }
 		public double ToPrice(long tick)	{ return tick * TickSize; }
 
+		/// <summary>Set in State.Realtime: realtime trades drive the feed clock (FeedNow).</summary>
+		public bool TrackFeedClock
+		{
+			get { return trackFeedClock; }
+			set
+			{
+				trackFeedClock	= value;
+				feedOnPlayback	= NinjaTrader.Cbi.Connection.PlaybackConnection != null;
+			}
+		}
+
+		private bool		trackFeedClock;
+		private bool		feedOnPlayback;							// clock source when realtime started
+		private DateTime	lastTradeStamp	= DateTime.MinValue;
+		private DateTime	lastTradeSeenAt;
+		private DateTime	lastFeedNow		= DateTime.MinValue;	// last reading on that source
+
+		/// <summary>Until the first realtime trade a live PC clock is only trusted to within this much (it may run ahead of the feed).</summary>
+		private static readonly TimeSpan UnconfirmedClockTolerance = TimeSpan.FromMinutes(5);
+
+		/// <summary>
+		/// The feed's clock: the last realtime trade's time stamp plus the platform time since it arrived, never later
+		/// than the platform clock and never moving back. A PC clock running ahead of the feed's stamps, or a data thread
+		/// still working through queued trades, therefore never makes a bar look finished while its trades are still coming
+		/// in. Before the first realtime trade it is the replay clock in Playback, otherwise the PC clock minus 5 minutes
+		/// (a bar that ended minutes ago - evening, weekend - still counts as finished, one still forming does not).
+		/// </summary>
+		public DateTime FeedNow()
+		{
+			NinjaTrader.Cbi.Connection playback = NinjaTrader.Cbi.Connection.PlaybackConnection;	// read once
+			// Playback disconnected (or connected) under this instance: its clock is gone, and the PC date must not close
+			// the bar that was forming; the chart reloads on the next connection
+			if (trackFeedClock && (playback != null) != feedOnPlayback)
+				return lastFeedNow;
+			DateTime now = playback != null ? playback.Now : NinjaTrader.Core.Globals.Now;
+			DateTime feed;
+			if (lastTradeStamp == DateTime.MinValue)
+				feed = playback != null ? now : now - UnconfirmedClockTolerance;
+			else
+			{
+				feed = now > lastTradeSeenAt ? lastTradeStamp + (now - lastTradeSeenAt) : lastTradeStamp;
+				if (feed > now)
+					feed = now;
+			}
+			lastFeedNow = feed;
+			return feed;
+		}
+
 		/// <summary>
 		/// Feed every OnMarketData event here. Returns true when the event was a trade; the classified
 		/// trade is returned in 'trade'. Footprints are only built from trades when Volumetric bars are not used.
 		/// </summary>
-		/// <summary>Set in State.Realtime: realtime trades drive the feed clock (FeedNow).</summary>
-		public bool TrackFeedClock { get; set; }
-
-		private DateTime lastTradeStamp = DateTime.MinValue;
-		private DateTime lastTradeSeenAt;
-
-		/// <summary>
-		/// The feed's clock: the last realtime trade's time stamp plus the platform time since it arrived, never later
-		/// than the platform clock. A PC clock running ahead of the feed's stamps, or a data thread still working through
-		/// queued trades, therefore never makes a bar look finished while its trades are still coming in.
-		/// Before the first realtime trade it is the platform clock.
-		/// </summary>
-		public DateTime FeedNow()
-		{
-			DateTime now = IdcClock.Now;
-			if (lastTradeStamp == DateTime.MinValue)
-				return now;
-			DateTime feed = now > lastTradeSeenAt ? lastTradeStamp + (now - lastTradeSeenAt) : lastTradeStamp;
-			return feed < now ? feed : now;
-		}
-
 		public bool ProcessMarketData(MarketDataEventArgs e, int currentBar, out IdcTrade trade)
 		{
 			trade = new IdcTrade();
@@ -350,7 +377,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			trade.Side		= side;
 			trade.Time		= e.Time;
 			TradesProcessed++;
-			if (TrackFeedClock)
+			// an out-of-sequence print with an older stamp does not move the feed clock back
+			if (trackFeedClock && e.Time >= lastTradeStamp)
 			{
 				// arrival first: a heartbeat that sees the new stamp also sees when it arrived
 				lastTradeSeenAt	= IdcClock.Now;
@@ -557,13 +585,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		/// <summary>
 		/// True when the bar that just closed is only seen to close when the next session opens, long after it ended (daily
 		/// break, weekend): its bar-close alerts would be stale. Sessions that follow each other directly (24 h forex / crypto
-		/// templates) close their boundary bar on time, so those still alert.
+		/// templates) close their boundary bar on time, so those still alert. 'now' is the feed clock (FeedNow).
 		/// </summary>
-		public static bool IsStaleSessionClose(Bars bars, int closedBar)
+		public static bool IsStaleSessionClose(Bars bars, int closedBar, DateTime now)
 		{
 			if (bars == null || closedBar < 0 || closedBar >= bars.Count || !bars.IsFirstBarOfSession)
 				return false;
-			return (IdcClock.Now - bars.GetTime(closedBar)).TotalMinutes > 5;
+			return (now - bars.GetTime(closedBar)).TotalMinutes > 5;
 		}
 
 		/// <summary>

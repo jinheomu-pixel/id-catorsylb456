@@ -83,7 +83,11 @@ Saat market tutup, misalnya jeda harian 16:00–17:00 CT atau akhir pekan, bar t
 
 Detailnya:
 - **Jam acuan.** Waktu yang dipakai adalah jam data feed: stempel waktu transaksi terakhir ditambah waktu yang berlalu sejak transaksi itu masuk. Jadi jam PC yang kecepetan, atau data yang sedang menumpuk saat pasar ramai, tidak membuat bar ditutup sebelum transaksinya selesai.
-- **Playback.** Yang dipakai adalah jam replay. Kalau Playback di-pause, bar yang sedang berjalan tetap terbuka sampai replay dilanjutkan.
+- **Sebelum transaksi realtime pertama** (misalnya chart baru dibuka), jam PC dipakai dengan toleransi 5 menit.
+  - Bar yang selesai lebih dari 5 menit lalu (malam hari, akhir pekan) langsung ditutup saat chart dibuka.
+  - Kalau chart dibuka beberapa menit setelah market tutup, bar terakhir baru ditutup sekitar 5,5 menit setelah waktunya habis.
+  - Kalau jam PC lebih lambat dari feed, bar ditutup terlambat sebanyak selisih jam itu.
+- **Playback.** Yang dipakai adalah jam replay. Kalau Playback di-pause, bar yang sedang berjalan tetap terbuka sampai replay dilanjutkan. Kalau koneksi Playback diputus saat chart masih terbuka, bar yang sedang berjalan tidak ditutup dan tidak ada alert.
 - **Alert *on bar close* yang basi.** Bar yang baru ketahuan selesai saat sesi berikutnya dibuka (lebih dari 5 menit setelah bar itu berakhir) tidak dibunyikan alertnya, karena sudah basi.
 - **Pasar 24 jam.** Di template sesi yang langsung menyambung (forex, crypto), bar di batas sesi tetap dapat alert.
 
@@ -172,10 +176,14 @@ dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bi
 
 Kode ditulis kompatibel dengan **C# 5**, karena NinjaTrader sebelum 8.1.2 hanya mendukung C# 5.
 
-Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 95 skenario:
+Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 102 skenario:
 - Tick Replay, Volumetric, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
 - Realtime: update di bar yang belum close, repaint chart, zona berhenti tepat di tick yang menyentuh, pasar sepi, dan bar terakhir sebelum market tutup.
-- Jam: Playback hari lampau, jam PC lebih cepat dari feed, dan alert di batas sesi.
+- Jam:
+  - Playback: hari lampau, pause, dan koneksi diputus.
+  - Jam PC: lebih cepat atau lebih lambat dari feed, dan chart dibuka di tengah bar.
+  - Riwayat Tick Replay.
+  - Alert di batas sesi, termasuk ambang basi 5 menit.
 - Detail visual yang diukur dari video: label, warna zona tersentuh, dan huruf K.
 
 ```bash

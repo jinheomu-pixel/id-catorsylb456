@@ -152,7 +152,7 @@ namespace SimTest
 			Tape tape = HvnScenarios.FourPeriods(out p1);
 			int firstOf20 = Gen.FirstAt(tape.Trades, Gen.BarStart(20));
 			int firstOf32 = Gen.FirstAt(tape.Trades, Gen.BarStart(32));
-			int fills = -1, fillsOn = -1;
+			int fills = -1, fillsOn = -1, textsOff = -1, textsOn = -1;
 			foreach (bool show in new[] { false, true })
 			{
 				Sim<IDCHvnProfile> sim = new Sim<IDCHvnProfile>(new SimOptions(), i => { i.ShowDevelopingZones = show; i.ShowHistogram = false; });
@@ -167,9 +167,12 @@ namespace SimTest
 				int y = chart.Y(5022.00);
 				int n = chart.Ops.Count(o => o.Kind == "FillRectangle" && o.Y <= y && o.Y + o.H >= y && o.X >= chart.BarX(20) - 15);
 				if (show) fillsOn = n; else fills = n;
+				int texts = chart.Ops.Count(o => o.Kind == "Text" && o.X >= chart.BarX(20) - 15);
+				if (show) textsOn = texts; else textsOff = texts;
 			}
 			c.Eq(0, fills, "no zone drawn for the running period by default");
 			c.Check(fillsOn > 0, "the option draws the developing zone (" + fillsOn + " fills)");
+			c.Eq(textsOff, textsOn, "developing zones are drawn without labels");
 		}
 
 		private static void CapitalK(Ctx c)
