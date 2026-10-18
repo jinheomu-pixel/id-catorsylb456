@@ -96,6 +96,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private volatile bool							renderDirty;
 		private DateTime								lastRefresh		= DateTime.MinValue;
 		private bool									sessionBreakClose;
+		private bool									liveDirtySeen;		// a live update was already pending at the previous heartbeat
+		private IdcHeartbeat							heartbeat;
+		private const int								HeartbeatMs		= 300;
 		private IdcFootprintEngine						engine;
 		private IdcBarWindowStats						aggressiveStats;
 		private IdcBarWindowStats						levelStats;
@@ -205,6 +208,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					lastPrice		= 0;
 					firstRealtimeTradeBar	= -1;
 					pendingAlerts.Clear();
+					liveDirty		= false;
+					liveDirtySeen	= false;
 					psychStep		= 0;
 				}
 			}
@@ -217,13 +222,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
-				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-				if (engine != null && IdcBars.IsBarComplete(Bars, last))
+				if (engine != null)
 					lock (sync)
-						AnalyzeClosedBars(last);
+						CloseQuietBar();
+				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
 			{
+				if (heartbeat != null)
+				{
+					heartbeat.Dispose();
+					heartbeat = null;
+				}
 				if (dxBrushes != null)
 				{
 					dxBrushes.Dispose();
@@ -258,7 +268,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					if (isTrade)
 						liveDirty = true;
 					if (liveDirty)
-						UpdateLiveBar();
+						UpdateLiveBar(false);
 				}
 			if (State == State.Realtime)
 				RequestRefresh();
@@ -333,6 +343,46 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			FlushAlerts();
 		}
 
+		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): analyse it once it ended 30 s ago.</summary>
+		private bool CloseQuietBar()
+		{
+			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+				return false;
+			AnalyzeClosedBars(last);
+			return true;
+		}
+
+		/// <summary>Timer thread: hand the work to the data thread, where the bar indexes are synchronised.</summary>
+		private void OnHeartbeat()
+		{
+			if (State == State.Realtime && engine != null)
+				TriggerCustomEvent(HeartbeatWork, null);
+		}
+
+		private void HeartbeatWork(object state)
+		{
+			if (State != State.Realtime || engine == null)
+				return;
+			bool refresh;
+			lock (sync)
+			{
+				refresh = CloseQuietBar();
+				// the last trades before a lull fell inside the throttle window: show them now
+				if (LiveBar && liveDirty && liveDirtySeen)
+					UpdateLiveBar(true);
+				liveDirtySeen = liveDirty;
+				if (renderDirty)
+				{
+					renderDirty	= false;
+					refresh		= true;
+				}
+			}
+			FlushAlerts();
+			if (refresh)
+				ForceRefresh();
+		}
+
 		private void AnalyzeClosedBars(int closed)
 		{
 			while (lastAnalyzedBar < closed)
@@ -403,18 +453,29 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				FireBarAlerts(result, bar);
 		}
 
-		private void UpdateLiveBar()
+		private void UpdateLiveBar(bool force)
 		{
-			// platform clock: wall time in realtime, replay time in Playback
+			// the bar was already closed by the heartbeat (quiet market): its final signals are shown instead
+			if (CurrentBar <= lastAnalyzedBar)
+			{
+				liveDirty = false;
+				return;
+			}
+			// platform clock: wall time in realtime, replay time in Playback (a clock stepping back never blocks the update)
 			DateTime now = NinjaTrader.Core.Globals.Now;
-			if (liveBar == CurrentBar && (now - lastLiveUpdate).TotalMilliseconds < 250)
+			if (!force && liveBar == CurrentBar && now >= lastLiveUpdate && (now - lastLiveUpdate).TotalMilliseconds < 250)
 				return;
 
 			IdcFootprintBar fp = engine.GetBar(CurrentBar, false);
 			if (fp == null || fp.IsEmpty)
+			{
+				if (force)
+					liveDirty = false;
 				return;
+			}
 			lastLiveUpdate	= now;
 			liveDirty		= false;
+			liveDirtySeen	= false;
 			liveSignals		= Evaluate(fp, CurrentBar);
 			liveBar			= CurrentBar;
 			renderDirty		= true;

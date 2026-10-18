@@ -884,6 +884,16 @@ namespace NinjaTrader.NinjaScript
 
 		public void Print(object value) { SimPrints.Add(value == null ? "" : value.ToString()); }
 		public void Log(string message, LogLevel logLevel) { SimLogs.Add(logLevel + ": " + message); }
+		/// <summary>Runs the custom event right away on the calling (test) thread, like NinjaTrader after synchronising its indexes.
+		/// Not executed before DataLoaded or once terminated (NinjaTrader help guide).</summary>
+		public int SimCustomEvents;
+		public void TriggerCustomEvent(Action<object> customEvent, object state)
+		{
+			if (State == State.SetDefaults || State == State.Configure || State == State.Terminated)
+				return;
+			SimCustomEvents++;
+			customEvent(state);
+		}
 
 		public void Alert(string id, Priority priority, string message, string soundLocation, int rearmSeconds,
 			System.Windows.Media.Brush backBrush, System.Windows.Media.Brush foreBrush)

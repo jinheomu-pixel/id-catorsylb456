@@ -108,6 +108,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private volatile bool						renderDirty;
 		private DateTime							lastRefresh		= DateTime.MinValue;
 		private bool								calculateWarning;
+		private bool								sessionBreakClose;
+		private IdcHeartbeat						heartbeat;
+		private const int							HeartbeatMs		= 300;
 
 		protected override void OnStateChange()
 		{
@@ -178,17 +181,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): close the last loaded bar now instead of waiting for a tick
-				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-				if (engine != null && IdcBars.IsBarComplete(Bars, last))
+				if (engine != null)
 					lock (sync)
-						while (lastClosedBar < last)
-						{
-							lastClosedBar++;
-							OnBarClosed(lastClosedBar);
-						}
+						CloseQuietBar();
+				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
 			{
+				if (heartbeat != null)
+				{
+					heartbeat.Dispose();
+					heartbeat = null;
+				}
 				if (dxBrushes != null)
 				{
 					dxBrushes.Dispose();
@@ -270,6 +274,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
+			// a bar that is only seen to close when the next session opens ended long ago: no alert for it
+			sessionBreakClose = Bars.IsFirstBarOfSession;
 			lock (sync)
 			{
 				while (lastClosedBar < closed)
@@ -286,6 +292,45 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				}
 			}
 			FlushAlerts();
+		}
+
+		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): close it once it ended 30 s ago.</summary>
+		private bool CloseQuietBar()
+		{
+			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+			if (last < 0 || lastClosedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+				return false;
+			while (lastClosedBar < last)
+			{
+				lastClosedBar++;
+				OnBarClosed(lastClosedBar);
+			}
+			return true;
+		}
+
+		/// <summary>Timer thread: hand the work to the data thread, where the bar indexes are synchronised.</summary>
+		private void OnHeartbeat()
+		{
+			if (State == State.Realtime && engine != null)
+				TriggerCustomEvent(HeartbeatWork, null);
+		}
+
+		private void HeartbeatWork(object state)
+		{
+			if (State != State.Realtime || engine == null)
+				return;
+			bool refresh;
+			lock (sync)
+				refresh = CloseQuietBar();
+			// a marker change inside the repaint throttle window, with no later event to carry it
+			if (renderDirty)
+			{
+				renderDirty	= false;
+				refresh		= true;
+			}
+			FlushAlerts();
+			if (refresh)
+				ForceRefresh();
 		}
 
 		/// <summary>Raises alerts collected under the lock, after it was released (OnRender takes the same lock).</summary>
@@ -445,15 +490,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (!barData.TryGetValue(bar, out data))
 				return;
 
-			// only bars that actually traded in realtime alert (no stale alerts after a session break)
-			if (AlertOnBarClose && State == State.Realtime && data.SeenRealtime)
+			// only bars that traded in realtime and closed inside their session alert (no stale alerts after a session break)
+			if (AlertOnBarClose && State == State.Realtime && data.SeenRealtime && !sessionBreakClose)
 			{
 				foreach (Marker marker in new[] { data.Buy, data.Sell })
 				{
 					if (marker == null || marker.DisplayValue < MinVolume)
 						continue;
 					string message = string.Format("{0}: heavy {1} absorption {2} @ {3}", Instrument.FullName,
-						marker.Side > 0 ? "BUY" : "SELL", IdcDraw.Volume(marker.DisplayValue),
+						marker.Side > 0 ? "BUY" : "SELL", IdcDraw.Volume(marker.DisplayValue, true),
 						Instrument.MasterInstrument.FormatPrice(engine.ToPrice(marker.Tick)));
 					pendingAlerts.Add(new IdcPendingAlert { Id = "IDCHeavyAbs" + (marker.Side > 0 ? "B" : "S") + bar, Priority = Priority.Medium,
 						Message = message, Sound = IdcSound.Resolve(AlertSound), RearmSeconds = 0,
@@ -554,7 +599,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						RenderTarget.DrawEllipse(ellipse, dxBrushes.Get(RenderTarget, color, RingOpacity / 100.0), 1.5f);
 
 						if (textFormat != null)
-							IdcDraw.Text(RenderTarget, textFormat, IdcDraw.Volume(m.DisplayValue), x, y, textBrush, IdcTextAnchor.Center);
+							IdcDraw.Text(RenderTarget, textFormat, IdcDraw.Volume(m.DisplayValue, true), x, y, textBrush, IdcTextAnchor.Center);
 					}
 				}
 				finally

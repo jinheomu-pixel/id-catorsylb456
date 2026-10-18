@@ -686,6 +686,80 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		}
 	}
 
+	/// <summary>
+	/// Wall-clock heartbeat for realtime work that must not wait for the next market event: showing the last throttled
+	/// update when the market goes quiet, and closing the last bar at a session end, weekend or Playback pause.
+	/// The callback runs on a timer thread; indicators hand the work to their data thread with TriggerCustomEvent.
+	/// </summary>
+	public sealed class IdcHeartbeat : IDisposable
+	{
+		/// <summary>Test hook: no timer thread is started, the test calls Tick() itself.</summary>
+		public static bool Manual;
+
+		private System.Threading.Timer	timer;
+		private Action					callback;
+		private int						busy;
+
+		public IdcHeartbeat(int periodMs, Action callback)
+		{
+			this.callback = callback;
+			if (!Manual)
+				timer = new System.Threading.Timer(OnTimer, null, periodMs, periodMs);
+		}
+
+		private void OnTimer(object state)
+		{
+			Tick();
+		}
+
+		public void Tick()
+		{
+			// a slow tick is never overlapped by the next one
+			if (System.Threading.Interlocked.CompareExchange(ref busy, 1, 0) != 0)
+				return;
+			try
+			{
+				Action cb = callback;
+				if (cb != null)
+					cb();
+			}
+			catch (Exception)
+			{
+				// a timer thread must never take the platform down; the next tick simply tries again
+			}
+			finally
+			{
+				System.Threading.Interlocked.Exchange(ref busy, 0);
+			}
+		}
+
+		public void Dispose()
+		{
+			callback = null;
+			System.Threading.Timer t = timer;
+			timer = null;
+			if (t != null)
+				t.Dispose();
+		}
+	}
+
+	/// <summary>Monotonic wall clock in milliseconds, independent of the Playback speed. Tests may replace Source.</summary>
+	public static class IdcWallClock
+	{
+		public static Func<long> Source;
+
+		public static long Ms
+		{
+			get
+			{
+				Func<long> source = Source;
+				if (source != null)
+					return source();
+				return (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1000.0 / System.Diagnostics.Stopwatch.Frequency));
+			}
+		}
+	}
+
 	/// <summary>An alert collected while a lock is held and raised after it is released.</summary>
 	public sealed class IdcPendingAlert
 	{
@@ -794,17 +868,24 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return new SharpDX.Size2F(layout.Metrics.Width, layout.Metrics.Height);
 		}
 
-		/// <summary>Compact volume text: 384, 1.2K, 3.4M.</summary>
+		/// <summary>Compact volume text: 384, 1.2k, 3.4M.</summary>
 		public static string Volume(double v)
 		{
+			return Volume(v, false);
+		}
+
+		/// <summary>Compact volume text with an upper-case thousands suffix when asked (Heavy Absorption circles: 9.1K).</summary>
+		public static string Volume(double v, bool upperK)
+		{
+			string k = upperK ? "K" : "k";
 			double a = Math.Abs(v);
 			System.Globalization.CultureInfo ci = System.Globalization.CultureInfo.InvariantCulture;
 			if (a >= 1000000)
 				return (v / 1000000.0).ToString(a >= 10000000 ? "0" : "0.#", ci) + "M";
 			if (a >= 10000)
-				return (v / 1000.0).ToString("0", ci) + "k";
+				return (v / 1000.0).ToString("0", ci) + k;
 			if (a >= 1000)
-				return (v / 1000.0).ToString("0.#", ci) + "k";
+				return (v / 1000.0).ToString("0.#", ci) + k;
 			if (a >= 10 || Math.Abs(v - Math.Round(v)) < 1e-9)
 				return Math.Round(v).ToString("0", ci);
 			return v.ToString("0.##", ci);

@@ -23,6 +23,10 @@ namespace SimTest
 		public static int Main(string[] args)
 		{
 			Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
+			// no timer threads in the simulator: scenarios drive the realtime heartbeat themselves (Sim.Heartbeat),
+			// and the wall clock follows the simulated platform clock
+			NinjaTrader.NinjaScript.Indicators.IDCator.IdcHeartbeat.Manual = true;
+			NinjaTrader.NinjaScript.Indicators.IDCator.IdcWallClock.Source = () => NinjaTrader.Core.Globals.SimNow.Ticks / TimeSpan.TicksPerMillisecond;
 			bool quick = args.Contains("--quick");
 			bool verbose = args.Contains("--verbose");
 			List<string> filters = args.Where(a => !a.StartsWith("--")).ToList();
@@ -38,6 +42,7 @@ namespace SimTest
 			scenarios.AddRange(Rev2PtkScenarios.All());
 			scenarios.AddRange(RegrScenarios.All());
 			scenarios.AddRange(RealtimeScenarios.All());
+			scenarios.AddRange(FidelityScenarios.All());
 			scenarios.AddRange(StressScenarios.All());
 			if (filters.Count > 0)
 				scenarios = scenarios.Where(s => filters.Any(f => s.Name.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();

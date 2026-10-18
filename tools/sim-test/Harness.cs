@@ -241,6 +241,28 @@ namespace SimTest
 
 		public void Terminate() { SetState(State.Terminated); }
 
+		/// <summary>One realtime heartbeat tick (the indicator's wall-clock timer) at the given platform time.</summary>
+		public void Heartbeat(DateTime now)
+		{
+			NinjaTrader.Core.Globals.SimNow = now;
+			System.Reflection.FieldInfo f = typeof(T).GetField("heartbeat", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+			NinjaTrader.NinjaScript.Indicators.IDCator.IdcHeartbeat hb = f == null ? null : f.GetValue(I) as NinjaTrader.NinjaScript.Indicators.IDCator.IdcHeartbeat;
+			if (hb != null)
+				hb.Tick();
+		}
+
+		/// <summary>No market events from the last time stamp until 'until'; the heartbeat ticks every stepMs meanwhile.</summary>
+		public void Quiet(DateTime until, int stepMs = 300)
+		{
+			DateTime t = NinjaTrader.Core.Globals.SimNow;
+			while (t < until)
+			{
+				t = t.AddMilliseconds(stepMs);
+				if (t > until) t = until;
+				Heartbeat(t);
+			}
+		}
+
 		/// <summary>Feeds trades tick by tick in the current state (Historical = Tick Replay, Realtime = live).</summary>
 		public void Feed(IEnumerable<Trade> trades)
 		{

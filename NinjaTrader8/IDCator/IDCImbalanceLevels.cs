@@ -63,6 +63,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private int						lastAnalyzedBar	= -1;
 		private int						nextZoneId;
 		private bool					calculateWarning;
+		private IdcHeartbeat			heartbeat;
+		private const int				HeartbeatMs		= 1000;
 		private int						touchBar	= -1;
 		private double					touchHigh;
 		private double					touchLow;
@@ -101,7 +103,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				MinOpacity					= 7;
 				MaxOpacity					= 45;
 				RatioForMaxOpacity			= 15;
-				TouchedOpacityPercent		= 60;
+				TouchedOpacityPercent		= 100;		// the original keeps a touched zone's fill, it only stops extending it
 				DrawLevelRows				= false;
 				ShowLabels					= true;
 				ShowTouchedZones			= true;
@@ -136,13 +138,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			else if (State == State.Realtime)
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
-				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-				if (engine != null && IdcBars.IsBarComplete(Bars, last))
+				if (engine != null)
 					lock (sync)
-						AnalyzeClosedBars(last);
+						CloseQuietBar();
+				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
 			{
+				if (heartbeat != null)
+				{
+					heartbeat.Dispose();
+					heartbeat = null;
+				}
 				if (dxBrushes != null)
 				{
 					dxBrushes.Dispose();
@@ -183,6 +190,35 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				Prune();
 			}
 			FlushAlerts();
+		}
+
+		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): analyse it once it ended 30 s ago.</summary>
+		private bool CloseQuietBar()
+		{
+			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+				return false;
+			AnalyzeClosedBars(last);
+			return true;
+		}
+
+		/// <summary>Timer thread: hand the work to the data thread, where the bar indexes are synchronised.</summary>
+		private void OnHeartbeat()
+		{
+			if (State == State.Realtime && engine != null)
+				TriggerCustomEvent(HeartbeatWork, null);
+		}
+
+		private void HeartbeatWork(object state)
+		{
+			if (State != State.Realtime || engine == null)
+				return;
+			bool refresh;
+			lock (sync)
+				refresh = CloseQuietBar();
+			FlushAlerts();
+			if (refresh)
+				ForceRefresh();
 		}
 
 		private void AnalyzeClosedBars(int closed)
@@ -467,12 +503,16 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 					RenderTarget.DrawRectangle(new SharpDX.RectangleF(x1, yTop, x2 - x1, yBottom - yTop), edge, 1f);
 
-					// like the original, the label is only drawn when it fits inside the zone
+					// like the original: right-aligned 5 px inside the zone end; a label wider than the zone starts 3 px inside its
+					// left edge and runs past the end. Hidden only when the zone is much narrower than the text (vendor footage:
+					// shown at about 0.9x the text width, hidden at about 0.7x) or too low for it
 					if (textFormat != null)
 					{
 						string label = IdcDraw.Ratio(zone.Ratio) + " | " + IdcDraw.Volume(zone.Volume);
-						IdcDraw.TextIfFits(RenderTarget, textFormat, label, x2 - 5, (yTop + yBottom) / 2f, textBrush, IdcTextAnchor.MiddleRight,
-							x2 - x1 - 8, (yBottom - yTop) / 0.8f);
+						SharpDX.Size2F size = IdcDraw.Measure(textFormat, label);
+						if (size.Width > 0 && x2 - x1 >= size.Width * 0.8f && size.Height <= (yBottom - yTop) / 0.8f)
+							IdcDraw.Text(RenderTarget, textFormat, label, Math.Max(x1 + 3, x2 - 5 - size.Width), (yTop + yBottom) / 2f,
+								textBrush, IdcTextAnchor.MiddleLeft);
 					}
 				}
 

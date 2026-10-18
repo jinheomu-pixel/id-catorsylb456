@@ -327,6 +327,8 @@ namespace NinjaTrader.NinjaScript
 
 		public void Print(object value) { }
 		public void Log(string message, LogLevel logLevel) { }
+		public void TriggerCustomEvent(Action<object> customEvent, object state) { }
+		public void TriggerCustomEvent(Action<object> customEvent, int barsSeriesIndex, object state) { }
 		public void Alert(string id, Priority priority, string message, string soundLocation, int rearmSeconds,
 			System.Windows.Media.Brush backBrush, System.Windows.Media.Brush foreBrush) { }
 		public void RearmAlert(string id) { }

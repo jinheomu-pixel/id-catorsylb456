@@ -316,7 +316,8 @@ namespace SimTest
 		{
 			Dictionary<long, long> p1;
 			Tape tape = FourPeriods(out p1);
-			Sim<IDCHvnProfile> sim = new Sim<IDCHvnProfile>(new SimOptions(), i => i.ProfileTimeframe = IdcProfileTimeframe.Minute5);
+			c.Check(!new Sim<IDCHvnProfile>(new SimOptions(), null).I.ShowPocLine, "POC line off by default (vendor default setup shows plain zones)");
+			Sim<IDCHvnProfile> sim = new Sim<IDCHvnProfile>(new SimOptions(), i => { i.ProfileTimeframe = IdcProfileTimeframe.Minute5; i.ShowPocLine = true; });
 			sim.StartHistorical();
 			sim.Feed(tape.Trades.Take(Gen.FirstAt(tape.Trades, Gen.BarStart(45))));
 			FakeChart chart = sim.Render(0, sim.Bars.Count - 1, 5000, 5052);

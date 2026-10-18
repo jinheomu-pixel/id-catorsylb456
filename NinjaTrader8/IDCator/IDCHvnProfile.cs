@@ -139,7 +139,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private bool						calculateWarning;
 		private bool						windowStarted;
 		private DateTime					lastLiveBuild	= DateTime.MinValue;
+		private long						lastLiveBuildWall;
+		private bool						liveRebuildNow	= true;
+		private bool						liveDirty;			// a realtime trade is not in the live profile yet
+		private bool						liveDirtySeen;		// ...and was already pending at the previous heartbeat
+		private IdcHeartbeat				heartbeat;
 		private const int					LiveUpdateMs	= 300;
+		private const int					LiveWallFloorMs	= 100;	// fast Playback: never rebuild more often than the chart repaints
+		private const int					HeartbeatMs		= 300;
+		private bool						timeBasedBars	= true;
 		private readonly List<IdcPendingAlert> pendingAlerts = new List<IdcPendingAlert>();
 		private int						touchBar	= -1;
 		private double					touchHigh;
@@ -179,10 +187,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				SecondaryZoneBrush			= new SolidColorBrush(Color.FromRgb(0x6E, 0x7D, 0xA0));
 				SecondaryZoneBrush.Freeze();
 				ZoneOpacity					= 20;
-				TouchedOpacityPercent		= 70;
+				TouchedOpacityPercent		= 100;		// the original keeps a touched zone's fill, it only stops extending it
 				ShowTouchedZones			= true;
+				ShowDevelopingZones			= false;	// the original shows a period's zones only once the period has ended
 				ExtendMode					= IdcExtendMode.LastBar;
-				ShowPocLine					= true;
+				ShowPocLine					= false;	// off in the vendor's default setup; their videos show it only on some charts
 				PocOnSecondary				= false;
 				ExtendPoc					= true;
 				PocBrush					= Brushes.Goldenrod;
@@ -228,7 +237,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					windowStarted	= false;
 					pendingAlerts.Clear();
 					lastLiveBuild	= DateTime.MinValue;
+					liveRebuildNow	= true;
+					liveDirty		= false;
+					liveDirtySeen	= false;
 				}
+				BarsPeriodType type = BarsPeriod.BarsPeriodType == BarsPeriodType.Volumetric ? BarsPeriod.BaseBarsPeriodType : BarsPeriod.BarsPeriodType;
+				timeBasedBars = type == BarsPeriodType.Second || type == BarsPeriodType.Minute || type == BarsPeriodType.Day
+					|| type == BarsPeriodType.Week || type == BarsPeriodType.Month || type == BarsPeriodType.Year;
 			}
 			else if (State == State.Historical)
 			{
@@ -240,21 +255,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				// market closed (evening / weekend): profile the last loaded bar and close a finished period now,
 				// instead of showing it as the live period until the next session's first tick
-				int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-				if (engine != null && IdcBars.IsBarComplete(Bars, last))
+				if (engine != null)
 					lock (sync)
-					{
-						AnalyzeClosedBars(last);
-						if (current != null && current.EndBar == last && PeriodEnd(current) <= NinjaTrader.Core.Globals.Now)
-						{
-							FinalizePeriod(current);
-							current = null;
-						}
-						BuildLiveProfile(false);
-					}
+						CloseQuietBar(false);
+				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
 			{
+				if (heartbeat != null)
+				{
+					heartbeat.Dispose();
+					heartbeat = null;
+				}
 				if (dxBrushes != null)
 				{
 					dxBrushes.Dispose();
@@ -274,15 +286,18 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				bool isTrade = engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
 
 				// realtime: the developing profile follows the forming bar trade by trade (throttled on the platform clock,
-				// replay time in Playback). Runs here, after the trade was added, so the latest print is always included.
+				// replay time in Playback, and on the wall clock for fast Playback). Runs here, after the trade was added,
+				// so the latest print is always included; a trade inside the throttle window is shown by the heartbeat.
 				if (isTrade && State == State.Realtime)
 				{
+					liveDirty = true;
 					DateTime now = NinjaTrader.Core.Globals.Now;
-					if ((now - lastLiveBuild).TotalMilliseconds >= LiveUpdateMs || now < lastLiveBuild)
+					long wall = IdcWallClock.Ms;
+					if (liveRebuildNow || (((now - lastLiveBuild).TotalMilliseconds >= LiveUpdateMs || now < lastLiveBuild)
+						&& (wall - lastLiveBuildWall >= LiveWallFloorMs || wall < lastLiveBuildWall)))
 					{
-						lastLiveBuild	= now;
-						BuildLiveProfile(true);
-						rebuilt			= true;
+						RebuildLive();
+						rebuilt = true;
 					}
 				}
 			}
@@ -323,7 +338,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 					if (changed)
 					{
 						BuildLiveProfile(true);
-						lastLiveBuild = DateTime.MinValue;
+						liveRebuildNow = true;
 					}
 				}
 				else if (changed && CurrentBar >= Count - 2)
@@ -344,12 +359,82 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			FlushAlerts();
 		}
 
+		private void RebuildLive()
+		{
+			lastLiveBuild		= NinjaTrader.Core.Globals.Now;
+			lastLiveBuildWall	= IdcWallClock.Ms;
+			liveRebuildNow		= false;
+			liveDirty			= false;
+			liveDirtySeen		= false;
+			BuildLiveProfile(true);
+		}
+
+		/// <summary>
+		/// The last bar (and its period) when no trade comes to close it: session end, weekend, Playback pause.
+		/// Bars are only closed once their end lies 30 s in the past (IdcBars.IsBarComplete), a period once its end does.
+		/// </summary>
+		private bool CloseQuietBar(bool withMargin)
+		{
+			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
+			if (last < 0 || !IdcBars.IsBarComplete(Bars, last))
+				return false;
+			bool changed = false;
+			if (lastAnalyzedBar < last)
+			{
+				AnalyzeClosedBars(last);
+				changed = true;
+			}
+			DateTime periodEnd = current != null && current.EndBar == last ? PeriodEnd(current) : DateTime.MaxValue;
+			if (periodEnd != DateTime.MaxValue && (withMargin ? periodEnd.AddSeconds(30) : periodEnd) <= NinjaTrader.Core.Globals.Now)
+			{
+				FinalizePeriod(current);
+				current = null;
+				changed = true;
+			}
+			if (changed || !withMargin)
+				BuildLiveProfile(false);
+			return changed;
+		}
+
+		/// <summary>Timer thread: hand the work to the data thread, where the bar indexes are synchronised.</summary>
+		private void OnHeartbeat()
+		{
+			if (State == State.Realtime && engine != null)
+				TriggerCustomEvent(HeartbeatWork, null);
+		}
+
+		private void HeartbeatWork(object state)
+		{
+			if (State != State.Realtime || engine == null)
+				return;
+			bool refresh = false;
+			lock (sync)
+			{
+				if (CloseQuietBar(true))
+					refresh = true;
+				// the last trades before a lull fell inside the throttle window: show them now
+				if (liveDirty && liveDirtySeen)
+				{
+					RebuildLive();
+					refresh = true;
+				}
+				liveDirtySeen = liveDirty;
+			}
+			FlushAlerts();
+			if (refresh)
+				ForceRefresh();
+		}
+
 		private bool AnalyzeClosedBars(int closed)
 		{
 			bool changed = false;
 			while (lastAnalyzedBar < closed)
 			{
 				lastAnalyzedBar++;
+				// tick / volume / range bars: Time[0] moved with every tick, so key the finished bar by its final time stamp
+				// (live, Tick Replay and a reload without Tick Replay then put a bar that straddles a boundary in the same period)
+				if (!timeBasedBars && lastAnalyzedBar <= CurrentBar)
+					barKeys[lastAnalyzedBar] = KeyAt(lastAnalyzedBar);
 				if (lastAnalyzedBar >= Count - MaxBarsBack && WindowReady(lastAnalyzedBar))
 				{
 					AddBar(lastAnalyzedBar);
@@ -816,9 +901,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 						continue;
 					zoneList.Add(CopyZone(z));
 				}
-				foreach (Zone z in liveZones)
-					if (z.StartBar <= toIndex)
-						zoneList.Add(CopyZone(z));
+				if (ShowDevelopingZones)
+					foreach (Zone z in liveZones)
+						if (z.StartBar <= toIndex)
+							zoneList.Add(CopyZone(z));
 
 				if (ShowHistogram)
 				{
@@ -908,7 +994,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 								dxBrushes.Get(RenderTarget, PocBrush, 0.3 * fade), PocWidth);
 					}
 
-					// the developing period's zones are drawn without labels, as in the original
+					// developing-period zones (optional) are drawn without labels: their numbers still change
 					if (labelFormat != null && !zone.IsLive)
 					{
 						float	yMid	= drawPoc ? yPoc : (yTop + yBottom) / 2f;
@@ -1046,6 +1132,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		[Display(Name = "Show touched zones", Order = 5, GroupName = "3. Zones")]
 		public bool ShowTouchedZones { get; set; }
+
+		[Display(Name = "Show developing period zones", Description = "Also draw the running period's clusters (dimmer, unlabelled) before the period ends. Off = as in the original: a period's zones appear, labelled, when it ends.", Order = 17, GroupName = "3. Zones")]
+		public bool ShowDevelopingZones { get; set; }
 
 		[Display(Name = "Extend active zones to", Order = 6, GroupName = "3. Zones")]
 		public IdcExtendMode ExtendMode { get; set; }
