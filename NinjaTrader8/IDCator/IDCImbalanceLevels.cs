@@ -139,8 +139,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
 				if (engine != null)
+				{
+					engine.TrackFeedClock = true;
 					lock (sync)
 						CloseQuietBar();
+				}
 				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
@@ -192,11 +195,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			FlushAlerts();
 		}
 
-		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): analyse it once it ended 30 s ago.</summary>
+		/// <summary>The last bar when no trade comes to close it (session end, weekend): analyse it once it ended 30 s ago on the feed clock.</summary>
 		private bool CloseQuietBar()
 		{
 			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last, engine.FeedNow()))
 				return false;
 			AnalyzeClosedBars(last);
 			return true;

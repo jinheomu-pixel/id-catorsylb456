@@ -39,6 +39,12 @@ namespace NinjaTrader.Cbi
 {
 	public enum InstrumentType { Cfd, CryptoCurrency, Forex, Future, Index, Option, Stock }
 
+	public class Connection
+	{
+		public static Connection	PlaybackConnection	{ get { return null; } }
+		public DateTime				Now					{ get { return DateTime.Now; } }
+	}
+
 	public class MasterInstrument
 	{
 		public double			TickSize		{ get; set; }

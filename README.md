@@ -74,12 +74,18 @@ Tanpa Tick Replay dan tanpa Volumetric, indikator tetap jalan untuk data **realt
 |---|---|---|
 | Imbalance Levels | Zona yang sudah ada berhenti tepat di tick yang menyentuhnya, dan alert bunyi saat itu juga | Zona baru dari bar itu muncul (sama seperti aslinya, imbalance dihitung dari bar yang sudah jadi) |
 | Heavy Absorption | Lingkaran muncul tepat di transaksi besarnya, lalu angkanya bertambah setiap ada transaksi sisi yang sama di harga itu | Nilai jadi final. Alert *on bar close* (kalau dipilih) |
-| HVN Profile | Histogram profil periode berjalan ikut berubah setiap transaksi (paling cepat tiap 300 ms). Zonanya belum digambar, sama seperti aslinya | Bar masuk ke profil periode. Saat periode selesai, zona final dan labelnya muncul |
+| HVN Profile | Histogram profil periode berjalan ikut berubah setiap transaksi (paling cepat tiap 300 ms). Zonanya belum digambar (seperti di sebagian besar video) | Bar masuk ke profil periode. Saat periode selesai, zona final dan labelnya muncul |
 | Pressure Toolkit | Bubble, big trade, dan titik absorption bar berjalan diperbarui (paling cepat tiap 250 ms) | Sinyal final dan alert |
 
 Chart langsung digambar ulang saat ada perubahan, jadi tidak perlu menunggu tick berikutnya. Kalau pasar mendadak sepi (tidak ada transaksi lagi), transaksi terakhir tetap muncul paling lambat sekitar 0,6 detik kemudian.
 
-Saat market tutup, misalnya jeda harian 16:00–17:00 CT, akhir pekan, atau Playback di-pause, bar terakhir tetap ditutup otomatis **30 detik setelah waktunya habis**. Zona Imbalance dari bar itu dan zona HVN periode itu langsung muncul, tanpa menunggu transaksi pertama sesi berikutnya. Hasilnya sama persis dengan chart yang baru dibuka belakangan. Alert *on bar close* untuk bar yang baru ketahuan selesai saat sesi berikutnya dibuka tidak dibunyikan, karena sudah basi.
+Saat market tutup, misalnya jeda harian 16:00–17:00 CT atau akhir pekan, bar terakhir tetap ditutup otomatis **30 detik setelah waktunya habis**. Zona Imbalance dari bar itu dan zona HVN periode itu langsung muncul, tanpa menunggu transaksi pertama sesi berikutnya. Hasilnya sama persis dengan chart yang baru dibuka belakangan.
+
+Detailnya:
+- **Jam acuan.** Waktu yang dipakai adalah jam data feed: stempel waktu transaksi terakhir ditambah waktu yang berlalu sejak transaksi itu masuk. Jadi jam PC yang kecepetan, atau data yang sedang menumpuk saat pasar ramai, tidak membuat bar ditutup sebelum transaksinya selesai.
+- **Playback.** Yang dipakai adalah jam replay. Kalau Playback di-pause, bar yang sedang berjalan tetap terbuka sampai replay dilanjutkan.
+- **Alert *on bar close* yang basi.** Bar yang baru ketahuan selesai saat sesi berikutnya dibuka (lebih dari 5 menit setelah bar itu berakhir) tidak dibunyikan alertnya, karena sudah basi.
+- **Pasar 24 jam.** Di template sesi yang langsung menyambung (forex, crypto), bar di batas sesi tetap dapat alert.
 
 ---
 
@@ -94,7 +100,7 @@ Saat market tutup, misalnya jeda harian 16:00–17:00 CT, akhir pekan, atau Play
 - Label `6.7x | 350` = rasio terkuat dalam stack | volume stack. Makin besar rasio, makin pekat warnanya (sekitar 7% di 5x sampai 40% di ≥15x).
 - Kalau sisi lawan diagonal bervolume **nol**, level itu dihitung imbalance tepat di rasio minimum (*Zero-value handling = CountAsMinRatio*). Ini sesuai label di video asli yang banyak berbunyi `5x | 8`. Level paling bawah/atas bar tidak punya pasangan diagonal, jadi tidak dihitung.
 - Label rata kanan 5 px sebelum ujung zona. Kalau zona sedikit lebih sempit dari teksnya (misalnya zona 2 bar yang langsung tersentuh bar berikutnya), label mulai dari tepi kiri zona dan boleh melewati ujung kanan, sama seperti di video. Label disembunyikan hanya kalau zona jauh lebih sempit dari teks (< 0,8×) atau terlalu pendek.
-- Zona yang sudah tersentuh **tidak** dibuat lebih pudar, cuma berhenti memanjang (sama seperti aslinya). Kalau mau dibedakan, turunkan *Touched zone opacity %*.
+- Zona yang sudah tersentuh **tidak** dibuat lebih pudar, cuma berhenti memanjang, sesuai warna yang diukur di video. Kalau mau dibedakan, turunkan *Touched zone opacity %*.
 - Setting penting: *Min imbalance ratio* (5), *Min stacked levels* (3), *Zero-value handling*, *Discard if next bar touches* (off), *Alert on zone touch*.
 
 ### Heavy Absorption
@@ -109,12 +115,12 @@ Saat market tutup, misalnya jeda harian 16:00–17:00 CT, akhir pekan, atau Play
 ### HVN Profile
 - *Profile timeframe*: 1m, 5m (default, sama seperti di video: chart NQ 15 detik dengan node per 5 menit), 15m, 30m, 1h, 2h, 4h, Daily, Weekly.
 - Profil volume per periode dihaluskan (*Smoothing passes*). Baris dengan volume ≥ *HVN threshold %* dari baris tertinggi digabung menjadi cluster (*Gap tolerance*, *Min cluster size*), lalu tepinya dirapikan (*Cluster sensitivity*: 0% = cluster utuh, 100% = hanya baris puncak).
-- Cluster terbesar di periode itu berwarna **oranye**, cluster lain **biru**. Garis **POC** (harga dengan volume terbesar di cluster) bisa dinyalakan lewat *Show POC line*. Default-nya mati, karena setup default di video asli hanya menampilkan zona polos.
+- Cluster terbesar di periode itu berwarna **oranye**, cluster lain **biru**. Garis **POC** (harga dengan volume terbesar di cluster) bisa dinyalakan lewat *Show POC line*. Default-nya mati, karena sebagian besar video, termasuk video tutorial pemasangan, hanya menampilkan zona polos. Di dua video lain garis POC terlihat, jadi tinggal dinyalakan kalau mau.
 - Zona yang sudah tersentuh tetap dengan warna yang sama, hanya berhenti memanjang.
 - Label `221 | 51%`: angka = volume di POC cluster (bisa diganti ke total volume cluster). Persentase = porsi sisi dominan, **hijau** kalau buyer dominan, **merah** kalau seller.
 - Zona baru bisa "tersentuh" setelah periodenya selesai (+ *Touch grace bars*), lalu berhenti di bar yang menyentuh. Ada alert sentuhan.
 - Histogram profil per periode bisa ditampilkan atau disembunyikan. Periode yang sedang berjalan digambar lebih transparan (*Live profile opacity*).
-- Di realtime, histogram periode berjalan ikut bergerak setiap transaksi, termasuk bar yang belum close (diperbarui paling cepat tiap 300 ms). Zona periode berjalan tidak digambar, sama seperti aslinya: zona dan labelnya muncul begitu periode selesai. Kalau mau melihat zona sementara (lebih pudar, tanpa label), nyalakan *Show developing period zones*.
+- Di realtime, histogram periode berjalan ikut bergerak setiap transaksi, termasuk bar yang belum close (diperbarui paling cepat tiap 300 ms). Zona periode berjalan tidak digambar: zona dan labelnya muncul begitu periode selesai, seperti di sebagian besar video. Di satu video terlihat zona sementara tanpa label. Kalau mau tampilan itu (lebih pudar, tanpa label), nyalakan *Show developing period zones*.
 - Di chart tick/volume/range, bar yang melewati batas periode dimasukkan ke periode tempat bar itu selesai, jadi hasil live sama dengan setelah chart di-reload.
 
 ### Pressure Toolkit
@@ -166,7 +172,11 @@ dotnet build tools/compile-check -p:NT8BinDir="C:\Program Files\NinjaTrader 8\bi
 
 Kode ditulis kompatibel dengan **C# 5**, karena NinjaTrader sebelum 8.1.2 hanya mendukung C# 5.
 
-Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 87 skenario: Tick Replay, Volumetric, realtime (update di bar yang belum close, repaint chart, zona berhenti tepat di tick yang menyentuh, pasar sepi, bar terakhir sebelum market tutup), market tutup, quote sintetis, stress 20.000 bar, render di thread lain, dan detail visual yang diukur dari video (label, warna zona tersentuh, huruf K).
+Ada juga **simulator perilaku**, yaitu runtime NinjaTrader palsu yang diberi data tick sintetis. Isinya 95 skenario:
+- Tick Replay, Volumetric, market tutup, quote sintetis, stress 20.000 bar, dan render di thread lain.
+- Realtime: update di bar yang belum close, repaint chart, zona berhenti tepat di tick yang menyentuh, pasar sepi, dan bar terakhir sebelum market tutup.
+- Jam: Playback hari lampau, jam PC lebih cepat dari feed, dan alert di batas sesi.
+- Detail visual yang diukur dari video: label, warna zona tersentuh, dan huruf K.
 
 ```bash
 dotnet run --project tools/sim-test -c Release            # semua skenario

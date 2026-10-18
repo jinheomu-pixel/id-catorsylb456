@@ -189,7 +189,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				ZoneOpacity					= 20;
 				TouchedOpacityPercent		= 100;		// the original keeps a touched zone's fill, it only stops extending it
 				ShowTouchedZones			= true;
-				ShowDevelopingZones			= false;	// the original shows a period's zones only once the period has ended
+				ShowDevelopingZones			= false;	// most vendor reels show a period's zones only once the period has ended
 				ExtendMode					= IdcExtendMode.LastBar;
 				ShowPocLine					= false;	// off in the vendor's default setup; their videos show it only on some charts
 				PocOnSecondary				= false;
@@ -256,8 +256,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				// market closed (evening / weekend): profile the last loaded bar and close a finished period now,
 				// instead of showing it as the live period until the next session's first tick
 				if (engine != null)
+				{
+					engine.TrackFeedClock = true;
 					lock (sync)
 						CloseQuietBar(false);
+				}
 				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
@@ -285,9 +288,9 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				bool isTrade = engine.ProcessMarketData(marketDataUpdate, CurrentBar, out trade);
 
-				// realtime: the developing profile follows the forming bar trade by trade (throttled on the platform clock,
-				// replay time in Playback, and on the wall clock for fast Playback). Runs here, after the trade was added,
-				// so the latest print is always included; a trade inside the throttle window is shown by the heartbeat.
+				// realtime: the developing profile follows the forming bar trade by trade (throttled on the platform clock and
+				// on the wall clock for fast Playback). Runs here, after the trade was added, so the latest print is always
+				// included; a trade inside the throttle window is shown by the heartbeat.
 				if (isTrade && State == State.Realtime)
 				{
 					liveDirty = true;
@@ -370,13 +373,15 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		}
 
 		/// <summary>
-		/// The last bar (and its period) when no trade comes to close it: session end, weekend, Playback pause.
-		/// Bars are only closed once their end lies 30 s in the past (IdcBars.IsBarComplete), a period once its end does.
+		/// The last bar (and its period) when no trade comes to close it: session end, weekend.
+		/// Bars are only closed once their end lies 30 s in the past on the feed clock (IdcBars.IsBarComplete), a period
+		/// once its end does.
 		/// </summary>
 		private bool CloseQuietBar(bool withMargin)
 		{
 			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-			if (last < 0 || !IdcBars.IsBarComplete(Bars, last))
+			DateTime now = engine.FeedNow();
+			if (last < 0 || !IdcBars.IsBarComplete(Bars, last, now))
 				return false;
 			bool changed = false;
 			if (lastAnalyzedBar < last)
@@ -385,7 +390,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				changed = true;
 			}
 			DateTime periodEnd = current != null && current.EndBar == last ? PeriodEnd(current) : DateTime.MaxValue;
-			if (periodEnd != DateTime.MaxValue && (withMargin ? periodEnd.AddSeconds(30) : periodEnd) <= NinjaTrader.Core.Globals.Now)
+			if (periodEnd != DateTime.MaxValue && (withMargin ? periodEnd.AddSeconds(30) : periodEnd) <= now)
 			{
 				FinalizePeriod(current);
 				current = null;
@@ -557,6 +562,10 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				FinalizePeriod(current);
 				current = null;
+				// tick / volume / range bars: the bar that opens the new period is only known to do so once it closed;
+				// test it against the zones just made, as a reload (one update per finished bar) does
+				if (bar < CurrentBar)
+					CheckTouches(bar, Bars.GetHigh(bar), Bars.GetLow(bar));
 			}
 			if (current == null)
 				current = new Period { Key = key, StartBar = bar };
@@ -1133,7 +1142,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		[Display(Name = "Show touched zones", Order = 5, GroupName = "3. Zones")]
 		public bool ShowTouchedZones { get; set; }
 
-		[Display(Name = "Show developing period zones", Description = "Also draw the running period's clusters (dimmer, unlabelled) before the period ends. Off = as in the original: a period's zones appear, labelled, when it ends.", Order = 17, GroupName = "3. Zones")]
+		[Display(Name = "Show developing period zones", Description = "Also draw the running period's clusters (dimmer, unlabelled) before the period ends. Off = as in most vendor videos: a period's zones appear, labelled, when it ends.", Order = 17, GroupName = "3. Zones")]
 		public bool ShowDevelopingZones { get; set; }
 
 		[Display(Name = "Extend active zones to", Order = 6, GroupName = "3. Zones")]

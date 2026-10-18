@@ -315,7 +315,9 @@ namespace NinjaTrader.Core
 		public static string						UserDataDir			{ get { return "C:\\Users\\sim\\Documents\\NinjaTrader 8\\"; } }
 		/// <summary>Simulation clock (set by the harness to the time of the event being processed).</summary>
 		public static DateTime						SimNow				= new DateTime(2026, 1, 1);
-		public static DateTime						Now					{ get { return SimNow; } }
+		/// <summary>PC clock minus the simulated feed / replay clock (a PC clock running ahead, or Playback of a past day).</summary>
+		public static TimeSpan						PcOffset;
+		public static DateTime						Now					{ get { return SimNow + PcOffset; } }
 		public static DateTime						MinDate				{ get { return new DateTime(1800, 1, 1); } }
 		public static double ToCryptocurrencyVolume(long volume) { return volume; }
 		public static NinjaTrader.Core.GeneralOptions GeneralOptions { get { return new GeneralOptions(); } }
@@ -342,6 +344,13 @@ namespace NinjaTrader.Core.FloatingPoint
 namespace NinjaTrader.Cbi
 {
 	public enum InstrumentType { Cfd, CryptoCurrency, Forex, Future, Index, Option, Stock }
+
+	/// <summary>Playback connection: Now is the replay time (the simulated feed clock). Null unless a scenario connects it.</summary>
+	public class Connection
+	{
+		public static Connection	PlaybackConnection	{ get; set; }
+		public DateTime				Now					{ get { return NinjaTrader.Core.Globals.SimNow; } }
+	}
 
 	public class MasterInstrument
 	{

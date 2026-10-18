@@ -43,6 +43,7 @@ namespace SimTest
 			scenarios.AddRange(RegrScenarios.All());
 			scenarios.AddRange(RealtimeScenarios.All());
 			scenarios.AddRange(FidelityScenarios.All());
+			scenarios.AddRange(ClockScenarios.All());
 			scenarios.AddRange(StressScenarios.All());
 			if (filters.Count > 0)
 				scenarios = scenarios.Where(s => filters.Any(f => s.Name.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
@@ -52,6 +53,9 @@ namespace SimTest
 			List<Tuple<Scenario, bool, double>> results = new List<Tuple<Scenario, bool, double>>();
 			foreach (Scenario s in scenarios)
 			{
+				// clocks back to normal: PC clock = feed clock, no Playback connection
+				NinjaTrader.Core.Globals.PcOffset = TimeSpan.Zero;
+				NinjaTrader.Cbi.Connection.PlaybackConnection = null;
 				Ctx ctx = new Ctx { Quick = quick };
 				Stopwatch sw = Stopwatch.StartNew();
 				string crash = null;

@@ -275,6 +275,27 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		/// Feed every OnMarketData event here. Returns true when the event was a trade; the classified
 		/// trade is returned in 'trade'. Footprints are only built from trades when Volumetric bars are not used.
 		/// </summary>
+		/// <summary>Set in State.Realtime: realtime trades drive the feed clock (FeedNow).</summary>
+		public bool TrackFeedClock { get; set; }
+
+		private DateTime lastTradeStamp = DateTime.MinValue;
+		private DateTime lastTradeSeenAt;
+
+		/// <summary>
+		/// The feed's clock: the last realtime trade's time stamp plus the platform time since it arrived, never later
+		/// than the platform clock. A PC clock running ahead of the feed's stamps, or a data thread still working through
+		/// queued trades, therefore never makes a bar look finished while its trades are still coming in.
+		/// Before the first realtime trade it is the platform clock.
+		/// </summary>
+		public DateTime FeedNow()
+		{
+			DateTime now = IdcClock.Now;
+			if (lastTradeStamp == DateTime.MinValue)
+				return now;
+			DateTime feed = now > lastTradeSeenAt ? lastTradeStamp + (now - lastTradeSeenAt) : lastTradeStamp;
+			return feed < now ? feed : now;
+		}
+
 		public bool ProcessMarketData(MarketDataEventArgs e, int currentBar, out IdcTrade trade)
 		{
 			trade = new IdcTrade();
@@ -329,6 +350,12 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			trade.Side		= side;
 			trade.Time		= e.Time;
 			TradesProcessed++;
+			if (TrackFeedClock)
+			{
+				// arrival first: a heartbeat that sees the new stamp also sees when it arrived
+				lastTradeSeenAt	= IdcClock.Now;
+				lastTradeStamp	= e.Time;
+			}
 
 			if (firstStreamBar < 0)
 			{
@@ -511,10 +538,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 	public static class IdcBars
 	{
 		/// <summary>
-		/// True when a time-based bar has certainly finished: its close timestamp lies in the past. Used when realtime starts
-		/// while the market is closed (evening, weekend), so the last loaded bar is not left waiting for a tick that never comes.
+		/// True when a time-based bar has certainly finished: its close timestamp lies 30 s before 'now' (the feed clock,
+		/// IdcFootprintEngine.FeedNow). Used when realtime starts while the market is closed (evening, weekend) and by the
+		/// heartbeat, so the last bar is not left waiting for a tick that never comes.
 		/// </summary>
-		public static bool IsBarComplete(Bars bars, int index)
+		public static bool IsBarComplete(Bars bars, int index, DateTime now)
 		{
 			if (bars == null || index < 0 || index >= bars.Count || bars.BarsPeriod == null)
 				return false;
@@ -522,8 +550,20 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			// intraday time bars only: Day / Week / Month bars carry the trading date (00:00), which lies in the past during the session
 			if (type != BarsPeriodType.Second && type != BarsPeriodType.Minute)
 				return false;
-			// margin: feed time stamps may lag the PC clock, a late print must not land in a bar that was already closed
-			return bars.GetTime(index).AddSeconds(30) <= NinjaTrader.Core.Globals.Now;
+			// margin: a late print must not land in a bar that was already closed
+			return bars.GetTime(index).AddSeconds(30) <= now;
+		}
+
+		/// <summary>
+		/// True when the bar that just closed is only seen to close when the next session opens, long after it ended (daily
+		/// break, weekend): its bar-close alerts would be stale. Sessions that follow each other directly (24 h forex / crypto
+		/// templates) close their boundary bar on time, so those still alert.
+		/// </summary>
+		public static bool IsStaleSessionClose(Bars bars, int closedBar)
+		{
+			if (bars == null || closedBar < 0 || closedBar >= bars.Count || !bars.IsFirstBarOfSession)
+				return false;
+			return (IdcClock.Now - bars.GetTime(closedBar)).TotalMinutes > 5;
 		}
 
 		/// <summary>
@@ -688,7 +728,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 	/// <summary>
 	/// Wall-clock heartbeat for realtime work that must not wait for the next market event: showing the last throttled
-	/// update when the market goes quiet, and closing the last bar at a session end, weekend or Playback pause.
+	/// update when the market goes quiet, and closing the last bar at a session end or weekend.
 	/// The callback runs on a timer thread; indicators hand the work to their data thread with TriggerCustomEvent.
 	/// </summary>
 	public sealed class IdcHeartbeat : IDisposable
@@ -740,6 +780,22 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			timer = null;
 			if (t != null)
 				t.Dispose();
+		}
+	}
+
+	/// <summary>
+	/// Market clock: replay time on the Playback connection (Core.Globals.Now stays on the PC clock there), otherwise
+	/// Core.Globals.Now. Same idiom as NinjaTrader's own @BarTimer.
+	/// </summary>
+	public static class IdcClock
+	{
+		public static DateTime Now
+		{
+			get
+			{
+				NinjaTrader.Cbi.Connection playback = NinjaTrader.Cbi.Connection.PlaybackConnection;
+				return playback != null ? playback.Now : NinjaTrader.Core.Globals.Now;
+			}
 		}
 	}
 

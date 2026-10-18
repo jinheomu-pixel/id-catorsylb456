@@ -95,7 +95,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private bool									liveDirty;
 		private volatile bool							renderDirty;
 		private DateTime								lastRefresh		= DateTime.MinValue;
-		private bool									sessionBreakClose;
 		private bool									liveDirtySeen;		// a live update was already pending at the previous heartbeat
 		private IdcHeartbeat							heartbeat;
 		private const int								HeartbeatMs		= 300;
@@ -223,8 +222,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				// market closed (evening / weekend): the last loaded bar is already complete, analyse it now
 				if (engine != null)
+				{
+					engine.TrackFeedClock = true;
 					lock (sync)
 						CloseQuietBar();
+				}
 				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
@@ -276,7 +278,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		/// <summary>
 		/// Marker changes made in OnMarketData (after that tick's OnBarUpdate) are pushed to the chart right away instead of
-		/// waiting for the next tick. Throttled on the platform clock (replay time in Playback).
+		/// waiting for the next tick. Throttled on the platform clock.
 		/// </summary>
 		private void RequestRefresh()
 		{
@@ -315,14 +317,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
-			// a bar that is only seen to close when the next session opens ended long ago: no alert for it
-			sessionBreakClose = Bars.IsFirstBarOfSession;
+			bool mayAlert = !IdcBars.IsStaleSessionClose(Bars, closed);
 			// a gap from the previous close to this bar crosses every level in between
 			double high	= Math.Max(High[0], Close[1]);
 			double low	= Math.Min(Low[0], Close[1]);
 			lock (sync)
 			{
-				AnalyzeClosedBars(closed);
+				AnalyzeClosedBars(closed, mayAlert);
 
 				// zones/lines only change when a new bar opened (new zones) or the forming bar made a new high/low
 				if (CurrentBar != touchBar || high > touchHigh || low < touchLow)
@@ -343,13 +344,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			FlushAlerts();
 		}
 
-		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): analyse it once it ended 30 s ago.</summary>
+		/// <summary>The last bar when no trade comes to close it (session end, weekend): analyse it once it ended 30 s ago on the feed clock.</summary>
 		private bool CloseQuietBar()
 		{
 			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+			if (last < 0 || lastAnalyzedBar >= last || !IdcBars.IsBarComplete(Bars, last, engine.FeedNow()))
 				return false;
-			AnalyzeClosedBars(last);
+			AnalyzeClosedBars(last, true);	// closed on time, 30 s after its end
 			return true;
 		}
 
@@ -383,13 +384,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				ForceRefresh();
 		}
 
-		private void AnalyzeClosedBars(int closed)
+		private void AnalyzeClosedBars(int closed, bool mayAlert)
 		{
 			while (lastAnalyzedBar < closed)
 			{
 				lastAnalyzedBar++;
 				if (lastAnalyzedBar >= Count - MaxBarsBack)
-					AnalyzeClosedBar(lastAnalyzedBar);
+					AnalyzeClosedBar(lastAnalyzedBar, mayAlert);
 			}
 		}
 
@@ -416,7 +417,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		}
 
 		#region Bar analysis
-		private void AnalyzeClosedBar(int bar)
+		private void AnalyzeClosedBar(int bar, bool mayAlert)
 		{
 			IdcFootprintBar fp = engine.GetBar(bar, true);
 			if (fp == null || fp.IsEmpty)
@@ -449,7 +450,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				liveBar		= -1;
 			}
 
-			if (State == State.Realtime && !sessionBreakClose && firstRealtimeTradeBar >= 0 && bar >= firstRealtimeTradeBar)
+			if (State == State.Realtime && mayAlert && firstRealtimeTradeBar >= 0 && bar >= firstRealtimeTradeBar)
 				FireBarAlerts(result, bar);
 		}
 
@@ -461,7 +462,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				liveDirty = false;
 				return;
 			}
-			// platform clock: wall time in realtime, replay time in Playback (a clock stepping back never blocks the update)
+			// platform clock (a clock stepping back never blocks the update)
 			DateTime now = NinjaTrader.Core.Globals.Now;
 			if (!force && liveBar == CurrentBar && now >= lastLiveUpdate && (now - lastLiveUpdate).TotalMilliseconds < 250)
 				return;

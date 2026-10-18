@@ -85,11 +85,26 @@ namespace SimTest
 
 		private static void WideZone(Ctx c)
 		{
-			Tape tape = ImbalanceScenarios.BuyStackTape();
+			// the BuyStackTape stack bar, then five bars that stay above the zone: a zone several bars wide
+			Tape tape = new Tape(0.25, Gen.T0);
+			Gen.Filler(tape, 0, 5001.50, 5001.75, 5001.25, 5002.00);
+			List<Level> stack = new List<Level>
+			{
+				new Level(5000.00, 2, 8), new Level(5000.25, 50, 6), new Level(5000.50, 75, 5), new Level(5000.75, 40, 3), new Level(5001.00, 10, 9),
+			};
+			stack.AddRange(Gen.Balanced(0.25, 5001.25, 5003.00, 8));
+			tape.Bar(Gen.BarStart(1), Gen.S15, 5000.75, 5002.00, stack, 5);
+			for (int b = 2; b < 7; b++)
+				Gen.Filler(tape, b, 5002.00, 5001.75, 5001.25, 5002.25);
 			Sim<IDCImbalanceLevels> sim = new Sim<IDCImbalanceLevels>(new SimOptions(), null);
 			sim.StartHistorical();
-			sim.Feed(tape.Trades.Take(Gen.FirstAt(tape.Trades, Gen.BarStart(3))));
-			LabelCase(c, sim, 700, true);
+			sim.Feed(tape.Trades);
+			FakeChart chart = RenderWidth(sim, 700);
+			SharpDX.Direct2D1.DrawOp rect = chart.Ops.FirstOrDefault(o => o.Kind == "FillRectangle");
+			SharpDX.Direct2D1.DrawOp text = chart.Ops.FirstOrDefault(o => o.Kind == "Text" && o.Text == "12.5x | 165");
+			c.Note("zone {0} px wide, text {1} px", rect != null ? F.S(rect.W) : "-", text != null ? F.S(text.W) : "-");
+			if (c.Check(rect != null && text != null && rect.W > 2 * text.W, "zone much wider than its label"))
+				c.Near(rect.X + rect.W - 5, text.X + text.W, 0.6, "label ends 5 px inside the zone end");
 		}
 
 		private static float FillAlpha(FakeChart chart, Func<SharpDX.Direct2D1.DrawOp, bool> where)

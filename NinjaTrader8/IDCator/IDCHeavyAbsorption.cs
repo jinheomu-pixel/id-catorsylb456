@@ -108,7 +108,6 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 		private volatile bool						renderDirty;
 		private DateTime							lastRefresh		= DateTime.MinValue;
 		private bool								calculateWarning;
-		private bool								sessionBreakClose;
 		private IdcHeartbeat						heartbeat;
 		private const int							HeartbeatMs		= 300;
 
@@ -182,8 +181,11 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			{
 				// market closed (evening / weekend): close the last loaded bar now instead of waiting for a tick
 				if (engine != null)
+				{
+					engine.TrackFeedClock = true;
 					lock (sync)
 						CloseQuietBar();
+				}
 				heartbeat = new IdcHeartbeat(HeartbeatMs, OnHeartbeat);
 			}
 			else if (State == State.Terminated)
@@ -210,7 +212,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 
 		/// <summary>
 		/// Marker changes made in OnMarketData (after that tick's OnBarUpdate) are pushed to the chart right away instead of
-		/// waiting for the next tick. Throttled on the platform clock (replay time in Playback).
+		/// waiting for the next tick. Throttled on the platform clock.
 		/// </summary>
 		private void RequestRefresh()
 		{
@@ -274,14 +276,13 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 				return;
 
 			int closed = IdcBars.LastClosedBar(State, Bars.IsTickReplay, CurrentBar, Count);
-			// a bar that is only seen to close when the next session opens ended long ago: no alert for it
-			sessionBreakClose = Bars.IsFirstBarOfSession;
+			bool mayAlert = !IdcBars.IsStaleSessionClose(Bars, closed);
 			lock (sync)
 			{
 				while (lastClosedBar < closed)
 				{
 					lastClosedBar++;
-					OnBarClosed(lastClosedBar);
+					OnBarClosed(lastClosedBar, mayAlert);
 				}
 
 				if (CurrentBar - lastPruneBar >= 200)
@@ -294,16 +295,16 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			FlushAlerts();
 		}
 
-		/// <summary>The last bar when no trade comes to close it (session end, weekend, Playback pause): close it once it ended 30 s ago.</summary>
+		/// <summary>The last bar when no trade comes to close it (session end, weekend): close it once it ended 30 s ago on the feed clock.</summary>
 		private bool CloseQuietBar()
 		{
 			int last = CurrentBar;		// read once: a data thread may open the next bar meanwhile
-			if (last < 0 || lastClosedBar >= last || !IdcBars.IsBarComplete(Bars, last))
+			if (last < 0 || lastClosedBar >= last || !IdcBars.IsBarComplete(Bars, last, engine.FeedNow()))
 				return false;
 			while (lastClosedBar < last)
 			{
 				lastClosedBar++;
-				OnBarClosed(lastClosedBar);
+				OnBarClosed(lastClosedBar, true);	// closed on time, 30 s after its end
 			}
 			return true;
 		}
@@ -478,7 +479,7 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			return Math.Max(v, marker.LargestPrint);
 		}
 
-		private void OnBarClosed(int bar)
+		private void OnBarClosed(int bar, bool mayAlert)
 		{
 			if (hasPending && pending.BarIndex <= bar && PrintGrouping != IdcPrintGrouping.Individual)
 			{
@@ -490,8 +491,8 @@ namespace NinjaTrader.NinjaScript.Indicators.IDCator
 			if (!barData.TryGetValue(bar, out data))
 				return;
 
-			// only bars that traded in realtime and closed inside their session alert (no stale alerts after a session break)
-			if (AlertOnBarClose && State == State.Realtime && data.SeenRealtime && !sessionBreakClose)
+			// only bars that traded in realtime alert, and not when the bar is only seen to close at the next session's open
+			if (AlertOnBarClose && mayAlert && State == State.Realtime && data.SeenRealtime)
 			{
 				foreach (Marker marker in new[] { data.Buy, data.Sell })
 				{

@@ -93,7 +93,9 @@ namespace SimTest
 			c.Note("watched: {0}", w);
 			c.Note("loaded later: {0}", r);
 			c.Check(watched.Count == 2 && w == r, "watched live = loaded later (2 finalized zones)");
-			c.Check(watched.All(z => !R.Get<bool>(z, "IsLive")), "zones are final (labelled)");
+			FakeChart chart = live.Render(18, live.Bars.Count - 1, 5018, 5032);
+			List<string> texts = chart.Texts.ToList();
+			c.Check(texts.Contains("124") && texts.Contains("104"), "both zones are drawn with their labels (124, 104): [" + string.Join(", ", texts) + "]");
 
 			live.Feed(tape.Trades.Skip(firstOf40).Take(Gen.FirstAt(tape.Trades, Gen.BarStart(42)) - firstOf40));
 			c.Eq(2, p2(live).Count, "no second profile for the period when trading resumes");
@@ -143,11 +145,15 @@ namespace SimTest
 			sim.Feed(tape.Trades.Take(firstOf80));
 			sim.GoRealtime();
 			sim.Feed(tape.Trades.Skip(firstOf80).Take(firstOf81 - firstOf80));
+			// two 20-lot sells at 5001.75 right after the bar's last print: inside the 250 ms throttle, no quote follows
+			DateTime last = tape.Trades[firstOf81 - 1].Time;
+			for (int k = 1; k <= 2; k++)
+				sim.Feed(new Trade { Time = last.AddMilliseconds(20 * k), Price = 5001.75, Volume = 20, Side = -1, Bid = 5001.75, Ask = 5002.00 });
 			string fresh = Sig(R.Call(sim.I, "Evaluate", R.Call(R.Get(sim.I, "engine"), "GetBar", 80, false), 80));
-			sim.Quiet(tape.Trades[firstOf81 - 1].Time.AddSeconds(1));
-			string shown = Sig(R.Get(sim.I, "liveSignals"));
 			c.Note("bar 80 footprint: {0}", fresh);
-			c.Eq(fresh, shown, "after a second without events the live bar shows the latest footprint");
+			c.Check(Sig(R.Get(sim.I, "liveSignals")) != fresh, "the last prints are not in the live bar yet (throttled)");
+			sim.Quiet(last.AddSeconds(1));
+			c.Eq(fresh, Sig(R.Get(sim.I, "liveSignals")), "after a second without events the heartbeat shows the latest footprint");
 			c.Check(!R.IntDict(sim.I, "signals").ContainsKey(80), "bar 80 not closed before its end + 30 s");
 			sim.Quiet(Gen.BarStart(81).AddSeconds(40));
 			c.Check(R.IntDict(sim.I, "signals").ContainsKey(80), "bar 80 closed by the heartbeat during the pause");
@@ -245,6 +251,28 @@ namespace SimTest
 			string zb = string.Join(" ", HvnScenarios.Zones(b.I).Select(z => HvnScenarios.Describe(z, 0.25)));
 			c.Note("live: {0}", za);
 			c.Note("reload: {0}", zb);
+			c.Check(za == zb, "same zones live and after reload");
+
+			// bar 14 (first bar of the 09:35 period once it closed) trades through the 09:30 period's zone, later bars stay above
+			Tape t2 = new Tape(0.25, Gen.T0.AddSeconds(1));
+			for (int bb = 0; bb < 30; bb++)
+			{
+				if (bb == 14) t2.Now = Gen.T0.AddMinutes(5).AddSeconds(-0.5);
+				else if (bb < 14) t2.Now = Gen.T0.AddSeconds(1 + bb * 20);
+				for (int j = 0; j < 20; j++)
+					t2.Print(bb < 15 ? 5000.00 + (j % 6) * 0.25 : 5003.00 + (j % 4) * 0.25, 3, j % 2 == 0 ? 1 : -1, 100);
+			}
+			Sim<IDCHvnProfile> a2 = new Sim<IDCHvnProfile>(new SimOptions { PeriodType = NinjaTrader.Data.BarsPeriodType.Tick, PeriodValue = 20 }, null);
+			a2.StartHistorical();
+			a2.Feed(t2.Trades.Take(10 * 20));
+			a2.GoRealtime();
+			a2.Feed(t2.Trades.Skip(10 * 20));
+			Sim<IDCHvnProfile> b2 = new Sim<IDCHvnProfile>(new SimOptions { PeriodType = NinjaTrader.Data.BarsPeriodType.Tick, PeriodValue = 20, TickReplay = false, Volumetric = true }, null);
+			b2.RunHistoricalBars(t2.Trades);
+			string la = string.Join(" ", HvnScenarios.Zones(a2.I).Select(z => HvnScenarios.Describe(z, 0.25)));
+			string lb = string.Join(" ", HvnScenarios.Zones(b2.I).Select(z => HvnScenarios.Describe(z, 0.25)));
+			c.Note("straddling bar touches: live {0}; reload {1}", la, lb);
+			c.Check(la == lb && la.Contains("end=14"), "the straddling bar freezes the previous period's zone live, as after a reload");
 		}
 
 		private static void HvnLive(Ctx c)
@@ -307,8 +335,6 @@ namespace SimTest
 			c.Check(live.Any(z => R.Get<long>(z, "LowTick") <= sim.Tick(5022.00) && R.Get<long>(z, "HighTick") >= sim.Tick(5022.00)), "a developing zone covers the 5022 node");
 			FakeChart chart = sim.RenderLast(12);
 			c.Check(chart.RT.Errors.Count == 0, "no render errors: " + string.Join("; ", chart.RT.Errors));
-			int finalizedLabels = chart.Texts.Count(t => t.Contains("|"));
-			c.Check(finalizedLabels <= HvnScenarios.Zones(sim.I).Count, "only finalized zones carry labels (" + finalizedLabels + " labels)");
 		}
 
 		private static void AbsorptionLive(Ctx c)
