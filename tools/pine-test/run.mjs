@@ -122,6 +122,33 @@ scenario('IMB-05 realtime: zone freezes on the touching tick', 'the zone stops o
     } finally { live.stop(); }
 });
 
+scenario('IMB-06 realtime: second zone touched later in the bar alerts too', 'bar 3 trades into the upper zone, later into the lower one: two alerts, one per newly touched zone', async (c) => {
+    const t = new Tape();
+    t.filler(0, 5001.50, 5001.75, 5001.25, 5002.00);
+    // lower stack 5000.25-5000.75 (12.5x | 165), upper stack 5001.75-5002.25 (10x | 180)
+    t.bar(1, 5000.75, 5003.00, [{ price: 5000.00, ask: 2, bid: 8 }, { price: 5000.25, ask: 50, bid: 6 }, { price: 5000.50, ask: 75, bid: 5 },
+        { price: 5000.75, ask: 40, bid: 3 }, { price: 5001.00, ask: 10, bid: 9 }, { price: 5001.25, ask: 8, bid: 8 },
+        { price: 5001.50, ask: 8, bid: 6 }, { price: 5001.75, ask: 60, bid: 6 }, { price: 5002.00, ask: 60, bid: 6 },
+        { price: 5002.25, ask: 60, bid: 8 }, ...balanced(5002.50, 5003.00, 8)], 5);
+    t.filler(2, 5003.00, 5002.75, 5002.75, 5003.25);
+    t.filler(3, 5002.75, 5001.00, 5000.50, 5002.75);
+    t.filler(4, 5001.00, 5001.25, 5000.75, 5001.50);
+    const trades = [...t.trades].sort((a, b) => a.time - b.time);
+    const firstOf3 = trades.findIndex((x) => x.time >= barStart(3));
+    const live = new Live(IMB, t);
+    try {
+        await live.start(trades[firstOf3 - 1].time);
+        c.eq(2, drawings(live.ctx).boxes.length, 'two support zones before bar 3');
+        for (let i = firstOf3; i < trades.length && trades[i].time < barStart(4); i++) await live.to(trades[i].time);
+        const alerts = (live.ctx.alerts ?? []).filter((a) => String(a.message).includes('imbalance')).map((a) => String(a.message));
+        c.eq(2, alerts.length, 'alerts in bar 3');
+        if (alerts.length === 2) {
+            c.check(alerts[0].includes('10x | 180') && !alerts[0].includes('12.5x'), `first alert: upper zone only: ${alerts[0]}`);
+            c.check(alerts[1].includes('12.5x | 165'), `second alert names the lower zone: ${alerts[1]}`);
+        }
+    } finally { live.stop(); }
+});
+
 // ═════════════════════════════════════════════ HVN Profile
 /** One 5-minute period (20 bars of 15 s) whose profile is base + nodes at `primary` (heavier) and `secondary`. */
 function hvnPeriod(t, firstBar, lo, hi, primary, secondary, primaryBuy = 0.65, secondaryBuy = 0.40) {

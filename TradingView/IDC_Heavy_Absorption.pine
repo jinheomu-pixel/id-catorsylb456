@@ -8,7 +8,7 @@
 // unit is the aggressive volume per price per bar (footprint cell) rather than a single print.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, max_labels_count = 500, max_bars_back = 5000)
+indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, max_labels_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"
@@ -163,8 +163,11 @@ if barstate.islast and sizingInput == "Relative to markers" and markers.size() >
         if not na(mk.ring)
             mk.ring.set_size(sz)
 
+var bool anyFp = false
+if not na(fp)
+    anyFp := true
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
-    string msg = na(fp) ? "IDC Heavy Absorption: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
+    string msg = not anyFp ? "IDC Heavy Absorption: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
          not ready ? "IDC Heavy Absorption: collecting statistics (" + str.tostring(totN) + "/" + str.tostring(minSamplesInput) + ")" : ""
     table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)

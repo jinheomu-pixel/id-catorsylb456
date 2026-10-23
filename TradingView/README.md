@@ -37,7 +37,7 @@ FundedNext Futures resmi mendukung TradingView sebagai platform trading. Jadi ch
 
 Klik ikon jam alarm, pilih **Condition** = nama indikator, lalu **Any alert() function call**. Atur sumber alert di setting tiap indikator:
 
-- Imbalance dan HVN: saat harga menyentuh zona.
+- Imbalance dan HVN: saat harga menyentuh zona (setiap zona baru yang tersentuh, juga kalau beberapa zona tersentuh di bar yang sama).
 - Heavy Absorption: saat bar close.
 - Pressure Toolkit: per jenis sinyal.
 
@@ -67,7 +67,7 @@ Jalankan:
 ```
 cd tools/pine-test
 npm install
-node run.mjs --verbose          # 13 skenario
+node run.mjs --verbose          # 14 skenario
 node run.mjs --render           # + gambar di tools/pine-test/out/
 node preview.mjs out/preview.png
 ```

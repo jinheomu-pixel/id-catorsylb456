@@ -15,6 +15,8 @@ G_PER = "Profile"
 string periodInput     = input.timeframe("5", "Profile timeframe", group = G_PER,
      tooltip = "Length of each profile: 1 minute to Weekly. Must be higher than the chart timeframe.")
 int    rowTicksInput   = input.int(0, "Row size (ticks, 0 = auto)", minval = 0, group = G_PER)
+int    fpTicksInput    = input.int(1, "Footprint ticks per row", minval = 1, group = G_PER,
+     tooltip = "Raise this on symbols with a very small tick (crypto) if the indicator shows no data.")
 int    targetRowsInput = input.int(60, "Auto: rows per profile", minval = 5, maxval = 400, group = G_PER)
 
 G_HVN = "High volume nodes"
@@ -55,7 +57,7 @@ bool   alertTouchInput = input.bool(true, "Alert when price touches a zone", gro
      tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
 
 // ───────────────────────────────────────────── data
-footprint fp = request.footprint(1)
+footprint fp = request.footprint(fpTicksInput)
 float tick = syminfo.mintick
 
 type Period
@@ -112,8 +114,10 @@ addRows(Period p, footprint f) =>
                 p.lowTick  := math.min(p.lowTick, k)
                 p.highTick := math.max(p.highTick, k)
 
+//@function Profile row size in ticks: a whole number of footprint rows.
 rowSize(int lowT, int highT) =>
-    rowTicksInput > 0 ? rowTicksInput : math.max(1, int(math.ceil((highT - lowT + 1) / math.max(5.0, targetRowsInput))))
+    int raw = rowTicksInput > 0 ? rowTicksInput : math.max(1, int(math.ceil((highT - lowT + 1) / math.max(5.0, targetRowsInput))))
+    int(math.ceil(raw / fpTicksInput)) * fpTicksInput
 
 //@function Row volumes of a period (with optionally one extra, unconfirmed footprint).
 rowsOf(Period p, footprint extra, int lowT, int rt, int nRows) =>
@@ -256,7 +260,7 @@ histPoly(Period p, footprint extra, int x0, int widthBars, color col) =>
                 array<chart.point> pts = array.new<chart.point>()
                 pts.push(chart.point.from_index(x0, lowT * tick))
                 for r = 0 to nRows - 1
-                    int w = int(math.round(widthBars * vol.get(r) / mx))
+                    int w = math.min(int(math.round(widthBars * vol.get(r) / mx)), bar_index + 500 - x0)
                     float yLo = (lowT + r * rt) * tick
                     float yHi = (lowT + (r + 1) * rt) * tick
                     pts.push(chart.point.from_index(x0 + w, yLo))
@@ -289,6 +293,8 @@ setRight(HZone z, int x) =>
 //@function Turns a finished period into zones (and an optional histogram).
 finalize(Period p) =>
     [clusters, rt] = analyze(p)
+    // drawings cannot start more than 10,000 bars back (and must stay inside max_bars_back)
+    int x0 = math.max(p.startBar, bar_index - 4999)
     int i = 0
     for c in clusters
         bool primary = i == 0
@@ -296,7 +302,7 @@ finalize(Period p) =>
         float bottom = (p.lowTick + c.first * rt) * tick
         float top    = (p.lowTick + (c.last + 1) * rt) * tick
         float mid    = (bottom + top) / 2
-        box b = box.new(p.startBar, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
+        box b = box.new(x0, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
              bgcolor = color.new(primary ? primaryInput : secondaryInput, 100 - zoneOpacInput))
         label ln = na
         label lp = na
@@ -319,13 +325,13 @@ finalize(Period p) =>
         line l2 = na
         if showPocInput and (primary or pocSecondaryInput)
             float py = (c.pocTick + 0.5) * tick
-            int brightEnd = math.min(p.startBar + 6, bar_index + 1)
-            l1 := line.new(p.startBar, py, brightEnd, py, color = color.new(pocColorInput, 40), width = 2)
+            int brightEnd = math.min(x0 + 6, bar_index + 1)
+            l1 := line.new(x0, py, brightEnd, py, color = color.new(pocColorInput, 40), width = 2)
             if extendPocInput
                 l2 := line.new(brightEnd, py, bar_index + 1, py, color = color.new(pocColorInput, 70), width = 2)
         zones.push(HZone.new(b, ln, lp, l1, l2, bottom, top, mid, c.pocTick, p.endBar, -1, primary))
     if showHistInput
-        polyline h = histPoly(p, na, p.startBar, math.max(1, int((p.endBar - p.startBar + 1) * histWidthInput / 100)), histColorInput)
+        polyline h = histPoly(p, na, x0, math.max(1, int((p.endBar - p.startBar + 1) * histWidthInput / 100)), histColorInput)
         if not na(h)
             hists.push(h)
             if hists.size() > 90
@@ -367,8 +373,16 @@ for z in zones
         else
             setRight(z, bar_index + 1)
 
+// touches only accumulate within a bar, so a changed message means a newly touched zone
+varip int    sentBar = -1
+varip string sentMsg = ""
 if alertTouchInput and str.length(touchMsg) > 0
-    alert(syminfo.ticker + " touched HVN zone " + touchMsg, alert.freq_once_per_bar)
+    if sentBar != bar_index
+        sentBar := bar_index
+        sentMsg := ""
+    if touchMsg != sentMsg
+        sentMsg := touchMsg
+        alert(syminfo.ticker + " touched HVN zone " + touchMsg, alert.freq_all)
 
 // ───────────────────────────────────────────── the closed bar joins its period; a period ending with this bar closes now
 if barstate.isconfirmed and not tfTooHigh
@@ -378,16 +392,20 @@ if barstate.isconfirmed and not tfTooHigh
         finalize(cur)
         cur := na
 
+var bool anyFp = false
+if not na(fp)
+    anyFp := true
+
 // ───────────────────────────────────────────── developing profile
 if barstate.islast and showLiveInput and not tfTooHigh
     if not na(livePoly)
         livePoly.delete()
     Period p = na(cur) ? newPeriod(pKey) : cur
     footprint extra = barstate.isconfirmed ? na : fp
-    livePoly := histPoly(p, extra, p.startBar, math.max(2, int(math.round((timeframe.in_seconds(periodInput) / timeframe.in_seconds()) * histWidthInput / 100))), liveColorInput)
+    livePoly := histPoly(p, extra, math.max(p.startBar, bar_index - 4999), math.max(2, int(math.round((timeframe.in_seconds(periodInput) / timeframe.in_seconds()) * histWidthInput / 100))), liveColorInput)
 
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
     string msg = tfTooHigh ? "IDC HVN: choose a profile timeframe higher than the chart timeframe" :
-         na(fp) ? "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
+         not anyFp ? "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
     table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)

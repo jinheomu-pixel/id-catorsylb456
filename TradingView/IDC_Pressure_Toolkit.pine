@@ -7,7 +7,7 @@
 // extended right until price returns. Psychological levels: round numbers scaled to the instrument.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, max_labels_count = 500, max_lines_count = 500, max_bars_back = 5000)
+indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, max_labels_count = 500, max_lines_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_GEN = "General"
@@ -283,6 +283,9 @@ if barstate.isconfirmed and not na(fp)
         lTotS -= lS.shift()
         lTotQ -= lQ.shift()
 
+// one alert per signal kind and bar (the kinds already sent this bar are skipped)
+varip int    sentBar   = -1
+varip string sentKinds = ""
 bool wantAlert = str.length(alertMsg) > 0 and (alertBubbleInput or alertBigInput or alertDotInput or alertLineInput or alertPsychInput)
 if wantAlert
     // only the kinds that are switched on
@@ -297,11 +300,22 @@ if wantAlert
         msg += "line-retest "
     if alertPsychInput and str.contains(alertMsg, "psychological")
         msg += "psych-cross "
-    if str.length(msg) > 0
-        alert(syminfo.ticker + " [" + msg + "] " + alertMsg, alert.freq_once_per_bar)
+    if sentBar != bar_index
+        sentBar   := bar_index
+        sentKinds := ""
+    string fresh = ""
+    for k in str.split(msg, " ")
+        if str.length(k) > 0 and not str.contains(sentKinds, k + " ")
+            fresh += k + " "
+    if str.length(fresh) > 0
+        sentKinds += fresh
+        alert(syminfo.ticker + " [" + fresh + "] " + alertMsg, alert.freq_all)
 
+var bool anyFp = false
+if not na(fp)
+    anyFp := true
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
-    string m = na(fp) ? "IDC Pressure Toolkit: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
+    string m = not anyFp ? "IDC Pressure Toolkit: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
          not ready ? "IDC Pressure Toolkit: collecting statistics" : ""
     table.cell(info, 0, 0, m, text_color = color.orange, text_size = 9)

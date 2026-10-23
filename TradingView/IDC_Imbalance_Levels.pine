@@ -6,7 +6,7 @@
 // it, then it stops at that bar. Label: strongest ratio | stack volume ("6.7x | 350"). Darker = stronger.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Imbalance Levels", "IDC Imbalance", overlay = true, max_boxes_count = 500, max_bars_back = 5000)
+indicator("IDC Imbalance Levels", "IDC Imbalance", overlay = true, max_boxes_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"
@@ -86,16 +86,16 @@ zoneOpacity(float r) =>
     float t = math.max(0.0, math.min(1.0, (r - minRatioInput) / math.max(0.0001, fullRatioInput - minRatioInput)))
     minOpacInput + (maxOpacInput - minOpacInput) * t
 
-newZone(bool support, float bottom, float top, float ratio, float volume) =>
+newZone(bool support, float bottom, float top, float ratio, float stackVol) =>
     color c = support ? supColorInput : resColorInput
     float op = zoneOpacity(ratio)
-    string txt = showLabelsInput ? ratioText(ratio) + " | " + volText(volume) : ""
+    string txt = showLabelsInput ? ratioText(ratio) + " | " + volText(stackVol) : ""
     box b = box.new(bar_index, top, bar_index + 1, bottom,
          border_color = color.new(c, 100 - math.min(100.0, op * 1.35 + 4)), border_width = 1,
          bgcolor = color.new(c, 100 - op), text = txt, text_size = textSizeInput, text_color = textColorInput,
          text_halign = text.align_right, text_valign = text.align_center, text_wrap = text.wrap_none,
          text_formatting = text.format_bold)
-    zones.push(Zone.new(b, bottom, top, support, bar_index, -1, ratio, volume))
+    zones.push(Zone.new(b, bottom, top, support, bar_index, -1, ratio, stackVol))
     // keep the chart within the drawing budget: drop the oldest touched zone first, then the oldest one
     if zones.size() > maxZonesInput
         int drop = 0
@@ -129,8 +129,16 @@ if zones.size() > 0
             else
                 z.bx.set_right(bar_index + 1)
 
+// touches only accumulate within a bar, so a changed message means a newly touched zone
+varip int    sentBar = -1
+varip string sentMsg = ""
 if alertTouchInput and str.length(touchMsg) > 0
-    alert(syminfo.ticker + " touched imbalance " + touchMsg, alert.freq_once_per_bar)
+    if sentBar != bar_index
+        sentBar := bar_index
+        sentMsg := ""
+    if touchMsg != sentMsg
+        sentMsg := touchMsg
+        alert(syminfo.ticker + " touched imbalance " + touchMsg, alert.freq_all)
 
 // ───────────────────────────────────────────── stacks of the bar that just closed
 if barstate.isconfirmed and not na(fp)
@@ -183,7 +191,10 @@ if barstate.isconfirmed and not na(fp)
                 runStart := -1
 
 // ───────────────────────────────────────────── status
+var bool anyFp = false
+if not na(fp)
+    anyFp := true
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
-    string msg = na(fp) ? "IDC Imbalance: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
+    string msg = not anyFp ? "IDC Imbalance: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
     table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)
