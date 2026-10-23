@@ -1,0 +1,393 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// IDCator - HVN Profile (clean-room replica of the order-flow tool shown in ProfitPro's videos; not their code)
+//
+// Builds a volume profile per period (default 5 minutes, as in the videos on a 15-second chart), finds its High Volume
+// Nodes (smoothed profile >= threshold % of the peak, clustered) and draws them as zones from the period start.
+// The period's biggest node is orange, the others slate blue. Label "N | P%": N = volume at the node's POC,
+// P = share of the dominant side (green = buyers, red = sellers). Zones extend until price trades back into them.
+// Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
+//@version=6
+indicator("IDC HVN Profile", "IDC HVN", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
+     max_polylines_count = 100, max_bars_back = 5000)
+
+// ───────────────────────────────────────────── inputs
+G_PER = "Profile"
+string periodInput     = input.timeframe("5", "Profile timeframe", group = G_PER,
+     tooltip = "Length of each profile: 1 minute to Weekly. Must be higher than the chart timeframe.")
+int    rowTicksInput   = input.int(0, "Row size (ticks, 0 = auto)", minval = 0, group = G_PER)
+int    targetRowsInput = input.int(60, "Auto: rows per profile", minval = 5, maxval = 400, group = G_PER)
+
+G_HVN = "High volume nodes"
+float  thresholdInput  = input.float(70, "HVN threshold %", minval = 1, maxval = 100, group = G_HVN)
+int    smoothingInput  = input.int(2, "Smoothing passes", minval = 0, maxval = 10, group = G_HVN)
+float  sensitivityInput = input.float(25, "Cluster sensitivity %", minval = 0, maxval = 100, group = G_HVN,
+     tooltip = "0% keeps the whole cluster above the threshold, 100% shrinks it to its peak rows.")
+int    minRowsInput    = input.int(2, "Min cluster size (rows)", minval = 1, group = G_HVN)
+int    gapInput        = input.int(1, "Gap tolerance (rows)", minval = 0, group = G_HVN)
+int    maxClustersInput = input.int(3, "Max clusters per period", minval = 1, maxval = 10, group = G_HVN)
+int    graceInput      = input.int(0, "Touch grace bars", minval = 0, group = G_HVN)
+
+G_VIS = "Display"
+color  primaryInput    = input.color(color.rgb(255, 165, 0), "Primary zone", group = G_VIS)
+color  secondaryInput  = input.color(color.rgb(110, 125, 160), "Other zones", group = G_VIS)
+int    zoneOpacInput   = input.int(20, "Zone opacity %", minval = 1, maxval = 100, group = G_VIS)
+int    touchedOpacInput = input.int(100, "Touched zone opacity (% of normal)", minval = 0, maxval = 100, group = G_VIS)
+bool   keepTouchedInput = input.bool(true, "Keep touched zones", group = G_VIS)
+bool   showLabelsInput = input.bool(true, "Show labels", group = G_VIS)
+color  labelColorInput = input.color(color.white, "Label number", group = G_VIS)
+color  buyPctInput     = input.color(color.rgb(46, 160, 110), "Buyers %", group = G_VIS)
+color  sellPctInput    = input.color(color.rgb(192, 74, 68), "Sellers %", group = G_VIS)
+int    labelSizeInput  = input.int(9, "Label size (pt)", minval = 5, maxval = 30, group = G_VIS)
+string labelValueInput = input.string("POC volume", "Label value", options = ["POC volume", "Cluster volume"], group = G_VIS)
+bool   showPocInput    = input.bool(false, "Show POC line", group = G_VIS)
+bool   pocSecondaryInput = input.bool(false, "POC line on other zones", group = G_VIS)
+bool   extendPocInput  = input.bool(true, "Extend POC line (dimmer)", group = G_VIS)
+color  pocColorInput   = input.color(color.rgb(218, 165, 32), "POC color", group = G_VIS)
+bool   showHistInput   = input.bool(false, "Show period histograms", group = G_VIS)
+bool   showLiveInput   = input.bool(false, "Show live (developing) histogram", group = G_VIS)
+int    histWidthInput  = input.int(35, "Histogram width % of period", minval = 5, maxval = 100, group = G_VIS)
+color  histColorInput  = input.color(color.new(color.rgb(112, 128, 144), 78), "Histogram", group = G_VIS)
+color  liveColorInput  = input.color(color.new(color.rgb(112, 128, 144), 88), "Live histogram", group = G_VIS)
+int    maxZonesInput   = input.int(200, "Max zones on chart", minval = 10, maxval = 240, group = G_VIS)
+
+G_ALR = "Alerts"
+bool   alertTouchInput = input.bool(true, "Alert when price touches a zone", group = G_ALR,
+     tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
+
+// ───────────────────────────────────────────── data
+footprint fp = request.footprint(1)
+float tick = syminfo.mintick
+
+type Period
+    int             key
+    int             startBar
+    int             endBar
+    int             lowTick
+    int             highTick
+    map<int, float> vol
+    map<int, float> buy
+    map<int, float> sell
+
+type Cluster
+    int   first
+    int   last
+    float vol
+    float buy
+    float sell
+    int   pocTick
+    float pocVol
+
+type HZone
+    box   bx
+    label num
+    label pct
+    line  poc
+    line  pocExt
+    float bottom
+    float top
+    float mid
+    int   pocTick
+    int   periodEndBar
+    int   endBar = -1
+    bool  primary
+
+newPeriod(int key) =>
+    Period.new(key, bar_index, bar_index, 2147483647, -2147483647, map.new<int, float>(), map.new<int, float>(), map.new<int, float>())
+
+var Period       cur   = na
+var array<HZone> zones = array.new<HZone>()
+var array<polyline> hists = array.new<polyline>()
+var polyline     livePoly = na
+
+//@function Adds one footprint (bar) to a period's tick maps.
+addRows(Period p, footprint f) =>
+    if not na(f)
+        for r in f.rows()
+            float v = r.total_volume()
+            if v > 0
+                int k = int(math.round(r.down_price() / tick))
+                p.vol.put(k, nz(p.vol.get(k)) + v)
+                p.buy.put(k, nz(p.buy.get(k)) + r.buy_volume())
+                p.sell.put(k, nz(p.sell.get(k)) + r.sell_volume())
+                p.lowTick  := math.min(p.lowTick, k)
+                p.highTick := math.max(p.highTick, k)
+
+rowSize(int lowT, int highT) =>
+    rowTicksInput > 0 ? rowTicksInput : math.max(1, int(math.ceil((highT - lowT + 1) / math.max(5.0, targetRowsInput))))
+
+//@function Row volumes of a period (with optionally one extra, unconfirmed footprint).
+rowsOf(Period p, footprint extra, int lowT, int rt, int nRows) =>
+    array<float> vol = array.new_float(nRows, 0.0)
+    for k in p.vol.keys()
+        int r = int(math.floor((k - lowT) / rt))
+        vol.set(r, vol.get(r) + p.vol.get(k))
+    if not na(extra)
+        for row in extra.rows()
+            int k = int(math.round(row.down_price() / tick))
+            int r = int(math.floor((k - lowT) / rt))
+            if r >= 0 and r < nRows
+                vol.set(r, vol.get(r) + row.total_volume())
+    vol
+
+//@function HVN clusters of a period, largest volume first.
+analyze(Period p) =>
+    array<Cluster> result = array.new<Cluster>()
+    if p.vol.size() > 0 and p.highTick >= p.lowTick
+        int lowT  = p.lowTick
+        int rt    = rowSize(p.lowTick, p.highTick)
+        int nRows = int(math.floor((p.highTick - lowT) / rt)) + 1
+        array<float> vol  = rowsOf(p, na, lowT, rt, nRows)
+        array<float> buy  = array.new_float(nRows, 0.0)
+        array<float> sell = array.new_float(nRows, 0.0)
+        for k in p.vol.keys()
+            int r = int(math.floor((k - lowT) / rt))
+            buy.set(r, buy.get(r) + nz(p.buy.get(k)))
+            sell.set(r, sell.get(r) + nz(p.sell.get(k)))
+        // 1-2-1 smoothing passes: single-row spikes flatten, plateaus (nodes) stay
+        array<float> sm = vol.copy()
+        for pass = 1 to smoothingInput
+            if pass > smoothingInput
+                break
+            array<float> nxt = array.new_float(nRows, 0.0)
+            for r = 0 to nRows - 1
+                float s = 2 * sm.get(r)
+                float w = 2.0
+                if r > 0
+                    s += sm.get(r - 1)
+                    w += 1
+                if r < nRows - 1
+                    s += sm.get(r + 1)
+                    w += 1
+                nxt.set(r, s / w)
+            sm := nxt
+        float thr = sm.max() * thresholdInput / 100
+        int row = 0
+        while row < nRows
+            if sm.get(row) < thr
+                row += 1
+                continue
+            // grow the cluster, bridging gaps of up to `gapInput` rows
+            int first = row
+            int last  = row
+            int gap   = 0
+            int r2    = row + 1
+            while r2 < nRows
+                if sm.get(r2) >= thr
+                    last := r2
+                    gap  := 0
+                else
+                    gap += 1
+                    if gap > gapInput
+                        break
+                r2 += 1
+            row := last + 1
+            // trim weak edges relative to the cluster's own peak, then regrow to the minimum size
+            float peak = 0.0
+            for r = first to last
+                peak := math.max(peak, sm.get(r))
+            float edge = thr + (peak - thr) * sensitivityInput / 100
+            int uFirst = first
+            int uLast  = last
+            while first < last and sm.get(first) < edge
+                first += 1
+            while last > first and sm.get(last) < edge
+                last -= 1
+            while last - first + 1 < minRowsInput and (first > uFirst or last < uLast)
+                if first > uFirst and (last >= uLast or sm.get(first - 1) >= sm.get(last + 1))
+                    first -= 1
+                else
+                    last += 1
+            if last - first + 1 >= minRowsInput
+                Cluster c = Cluster.new(first, last, 0.0, 0.0, 0.0, lowT + first * rt, 0.0)
+                for r = first to last
+                    c.vol  += vol.get(r)
+                    c.buy  += buy.get(r)
+                    c.sell += sell.get(r)
+                // POC: busiest single price inside the cluster
+                int lo = lowT + first * rt
+                int hi = lowT + (last + 1) * rt - 1
+                for t = lo to hi
+                    float v = nz(p.vol.get(t))
+                    if v > c.pocVol
+                        c.pocVol  := v
+                        c.pocTick := t
+                result.push(c)
+        // largest first, at most `maxClustersInput`
+        if result.size() > 1
+            array<float> vols = array.new_float()
+            for c in result
+                vols.push(c.vol)
+            array<int> order_ = vols.sort_indices(order.descending)
+            array<Cluster> sorted = array.new<Cluster>()
+            for i in order_
+                if sorted.size() < maxClustersInput
+                    sorted.push(result.get(i))
+            result := sorted
+    [result, rowSize(p.lowTick, p.highTick)]
+
+volText(float v) =>
+    float a = math.abs(v)
+    a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
+     a >= 1e4 ? str.tostring(v / 1e3, "#") + "k" :
+     a >= 1e3 ? str.tostring(v / 1e3, "#.#") + "k" :
+     str.tostring(math.round(v))
+
+zoneColor(HZone z) =>
+    float op = zoneOpacInput * (z.endBar >= 0 ? touchedOpacInput / 100 : 1.0)
+    color.new(z.primary ? primaryInput : secondaryInput, 100 - op)
+
+//@function Profile outline as a filled polyline from the period's first bar to the right.
+histPoly(Period p, footprint extra, int x0, int widthBars, color col) =>
+    polyline pl = na
+    if p.vol.size() > 0 or not na(extra)
+        int lowT  = p.lowTick
+        int highT = p.highTick
+        if not na(extra)
+            for row in extra.rows()
+                int k = int(math.round(row.down_price() / tick))
+                lowT  := math.min(lowT, k)
+                highT := math.max(highT, k)
+        if highT >= lowT
+            int rt    = rowSize(lowT, highT)
+            int nRows = int(math.floor((highT - lowT) / rt)) + 1
+            array<float> vol = rowsOf(p, extra, lowT, rt, nRows)
+            float mx = vol.max()
+            if mx > 0
+                array<chart.point> pts = array.new<chart.point>()
+                pts.push(chart.point.from_index(x0, lowT * tick))
+                for r = 0 to nRows - 1
+                    int w = int(math.round(widthBars * vol.get(r) / mx))
+                    float yLo = (lowT + r * rt) * tick
+                    float yHi = (lowT + (r + 1) * rt) * tick
+                    pts.push(chart.point.from_index(x0 + w, yLo))
+                    pts.push(chart.point.from_index(x0 + w, yHi))
+                pts.push(chart.point.from_index(x0, (lowT + nRows * rt) * tick))
+                pl := polyline.new(pts, closed = true, line_color = color.new(col, 100), fill_color = col)
+    pl
+
+deleteZone(HZone z) =>
+    z.bx.delete()
+    if not na(z.num)
+        z.num.delete()
+    if not na(z.pct)
+        z.pct.delete()
+    if not na(z.poc)
+        z.poc.delete()
+    if not na(z.pocExt)
+        z.pocExt.delete()
+
+//@function Moves a zone's right end (and its labels and POC extension) to bar `x`.
+setRight(HZone z, int x) =>
+    z.bx.set_right(x)
+    if not na(z.num)
+        z.num.set_x(x)
+    if not na(z.pct)
+        z.pct.set_x(x)
+    if not na(z.pocExt)
+        z.pocExt.set_x2(x)
+
+//@function Turns a finished period into zones (and an optional histogram).
+finalize(Period p) =>
+    [clusters, rt] = analyze(p)
+    int i = 0
+    for c in clusters
+        bool primary = i == 0
+        i += 1
+        float bottom = (p.lowTick + c.first * rt) * tick
+        float top    = (p.lowTick + (c.last + 1) * rt) * tick
+        float mid    = (bottom + top) / 2
+        box b = box.new(p.startBar, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
+             bgcolor = color.new(primary ? primaryInput : secondaryInput, 100 - zoneOpacInput))
+        label ln = na
+        label lp = na
+        if showLabelsInput
+            float sum   = c.buy + c.sell
+            float share = sum > 0 ? c.buy / sum : 0.5
+            bool  buyers = share >= 0.5
+            int   pctV  = math.max(51, int(math.round(100 * (buyers ? share : 1 - share))))
+            string num  = volText(labelValueInput == "POC volume" ? c.pocVol : c.vol)
+            string pctS = sum > 0 ? " | " + str.tostring(pctV) + "%" : ""
+            // two labels, same monospace font: the number in white, " | P%" in the dominant side's color
+            ln := label.new(bar_index + 1, mid, num + str.repeat(" ", str.length(pctS)), style = label.style_label_right,
+                 color = color.new(color.black, 100), textcolor = labelColorInput, size = labelSizeInput,
+                 text_font_family = font.family_monospace, text_formatting = text.format_bold)
+            if sum > 0
+                lp := label.new(bar_index + 1, mid, pctS, style = label.style_label_right, color = color.new(color.black, 100),
+                     textcolor = buyers ? buyPctInput : sellPctInput, size = labelSizeInput, text_font_family = font.family_monospace,
+                     text_formatting = text.format_bold)
+        line l1 = na
+        line l2 = na
+        if showPocInput and (primary or pocSecondaryInput)
+            float py = (c.pocTick + 0.5) * tick
+            int brightEnd = math.min(p.startBar + 6, bar_index + 1)
+            l1 := line.new(p.startBar, py, brightEnd, py, color = color.new(pocColorInput, 40), width = 2)
+            if extendPocInput
+                l2 := line.new(brightEnd, py, bar_index + 1, py, color = color.new(pocColorInput, 70), width = 2)
+        zones.push(HZone.new(b, ln, lp, l1, l2, bottom, top, mid, c.pocTick, p.endBar, -1, primary))
+    if showHistInput
+        polyline h = histPoly(p, na, p.startBar, math.max(1, int((p.endBar - p.startBar + 1) * histWidthInput / 100)), histColorInput)
+        if not na(h)
+            hists.push(h)
+            if hists.size() > 90
+                hists.shift().delete()
+    // drawing budget: oldest touched zones go first, then the oldest
+    while zones.size() > maxZonesInput
+        int drop = 0
+        for [k, z] in zones
+            if z.endBar >= 0
+                drop := k
+                break
+        deleteZone(zones.remove(drop))
+
+// ───────────────────────────────────────────── period bookkeeping
+int  pKey      = time(periodInput)
+bool tfTooHigh = timeframe.in_seconds() >= timeframe.in_seconds(periodInput)
+// end of an intraday period (Daily/Weekly periods close when the next period's first bar arrives)
+int  pEnd      = timeframe.in_seconds(periodInput) < 86400 and not na(pKey) ? pKey + timeframe.in_seconds(periodInput) * 1000 : na
+
+// a new period started: the previous one is complete (if it was not finalized at its last bar already)
+if not na(cur) and pKey != cur.key
+    finalize(cur)
+    cur := na
+if na(cur)
+    cur := newPeriod(pKey)
+
+// ───────────────────────────────────────────── touches and extension (every update)
+string touchMsg = ""
+for z in zones
+    if z.endBar < 0
+        bool canTouch = bar_index > z.periodEndBar + graceInput
+        if canTouch and high >= z.bottom - tick * 0.25 and low <= z.top - tick * 0.75
+            z.endBar := bar_index
+            setRight(z, bar_index)
+            z.bx.set_bgcolor(zoneColor(z))
+            if not keepTouchedInput
+                deleteZone(z)
+            touchMsg += str.tostring(z.bottom, format.mintick) + "-" + str.tostring(z.top - tick, format.mintick) + "  "
+        else
+            setRight(z, bar_index + 1)
+
+if alertTouchInput and str.length(touchMsg) > 0
+    alert(syminfo.ticker + " touched HVN zone " + touchMsg, alert.freq_once_per_bar)
+
+// ───────────────────────────────────────────── the closed bar joins its period; a period ending with this bar closes now
+if barstate.isconfirmed and not tfTooHigh
+    addRows(cur, fp)
+    cur.endBar := bar_index
+    if not na(pEnd) and time_close >= pEnd
+        finalize(cur)
+        cur := na
+
+// ───────────────────────────────────────────── developing profile
+if barstate.islast and showLiveInput and not tfTooHigh
+    if not na(livePoly)
+        livePoly.delete()
+    Period p = na(cur) ? newPeriod(pKey) : cur
+    footprint extra = barstate.isconfirmed ? na : fp
+    livePoly := histPoly(p, extra, p.startBar, math.max(2, int(math.round((timeframe.in_seconds(periodInput) / timeframe.in_seconds()) * histWidthInput / 100))), liveColorInput)
+
+var table info = table.new(position.top_right, 1, 1)
+if barstate.islast
+    string msg = tfTooHigh ? "IDC HVN: choose a profile timeframe higher than the chart timeframe" :
+         na(fp) ? "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
+    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)

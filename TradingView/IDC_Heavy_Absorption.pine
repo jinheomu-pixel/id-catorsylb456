@@ -1,0 +1,170 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// IDCator - Heavy Absorption (clean-room replica of the order-flow tool shown in ProfitPro's videos; not their code)
+//
+// Marks exceptionally heavy aggressive volume at a single price inside a bar: green circle = buyers, red = sellers.
+// Threshold = mean + k standard deviations of the heaviest price per bar and side over the lookback window, so it
+// adapts to the session. The number inside is the aggressive volume at that price; on the live bar it keeps counting up.
+// Circle size grows with the square root of the volume. TradingView gives no individual trades to scripts, so the
+// unit is the aggressive volume per price per bar (footprint cell) rather than a single print.
+// Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
+//@version=6
+indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, max_labels_count = 500, max_bars_back = 5000)
+
+// ───────────────────────────────────────────── inputs
+G_DET = "Detection"
+int    rowTicksInput  = input.int(1, "Ticks per row", minval = 1, group = G_DET)
+int    lookbackInput  = input.int(100, "Lookback bars", minval = 5, maxval = 2000, group = G_DET)
+float  kInput         = input.float(2.0, "Std dev multiplier", minval = 0, step = 0.1, group = G_DET,
+     tooltip = "Higher = fewer, bigger markers.")
+int    minSamplesInput = input.int(40, "Min samples before marking", minval = 5, group = G_DET,
+     tooltip = "Samples = the heaviest buy price and the heaviest sell price of every closed bar.")
+float  minVolInput    = input.float(0, "Min volume filter", minval = 0, group = G_DET, tooltip = "Hides markers below this volume.")
+string sideInput      = input.string("Both", "Sides", options = ["Both", "Buyers only", "Sellers only"], group = G_DET)
+
+G_VIS = "Display"
+color  bullInput      = input.color(color.rgb(38, 166, 91), "Bull circle", group = G_VIS)
+color  bearInput      = input.color(color.rgb(235, 64, 52), "Bear circle", group = G_VIS)
+int    fillTranspInput = input.int(68, "Fill transparency %", minval = 0, maxval = 100, group = G_VIS)
+bool   ringInput      = input.bool(true, "Ring", group = G_VIS)
+color  textInput      = input.color(color.white, "Text color", group = G_VIS)
+int    textSizeInput  = input.int(9, "Text size (pt)", minval = 5, maxval = 30, group = G_VIS)
+string sizingInput    = input.string("Relative to markers", "Circle sizing", options = ["Relative to markers", "Absolute"], group = G_VIS,
+     tooltip = "Relative: the biggest marker on the chart gets the max size (square-root scale). Absolute: size grows with volume / threshold.")
+int    minSizeInput   = input.int(16, "Min circle size (pt)", minval = 4, maxval = 120, group = G_VIS)
+int    maxSizeInput   = input.int(46, "Max circle size (pt)", minval = 4, maxval = 160, group = G_VIS)
+float  fullRatioInput = input.float(6, "Absolute: volume / threshold at max size", minval = 1.1, group = G_VIS)
+int    maxMarkersInput = input.int(160, "Max markers on chart", minval = 10, maxval = 166, group = G_VIS)
+
+G_ALR = "Alerts"
+bool   alertInput     = input.bool(false, "Alert on bar close", group = G_ALR,
+     tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
+
+// ───────────────────────────────────────────── data
+footprint fp = request.footprint(rowTicksInput)
+float tick = syminfo.mintick
+
+type Marker
+    label circle
+    label ring
+    label txt
+    int   bar
+    int   side
+    float price
+    float volume
+    float threshold
+
+var array<Marker> markers = array.new<Marker>()
+// rolling statistics of each closed bar's heaviest aggressive price (buy side and sell side), one bucket per bar
+var array<float> wN = array.new_float()
+var array<float> wS = array.new_float()
+var array<float> wQ = array.new_float()
+var float totN = 0.0
+var float totS = 0.0
+var float totQ = 0.0
+
+//@function Number text: 384, 1.2K, 12K, 3.4M (capital K as in the videos).
+volText(float v) =>
+    float a = math.abs(v)
+    a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
+     a >= 1e4 ? str.tostring(v / 1e3, "#") + "K" :
+     a >= 1e3 ? str.tostring(v / 1e3, "#.#") + "K" :
+     str.tostring(math.round(v))
+
+circleSize(float v, float thr, float vmax) =>
+    float t = sizingInput == "Absolute" ?
+         math.sqrt(math.max(0.0, math.min(1.0, (v / math.max(thr, 1e-9) - 1) / (fullRatioInput - 1)))) :
+         math.sqrt(math.max(0.0, math.min(1.0, v / math.max(vmax, 1e-9))))
+    int(math.round(minSizeInput + (maxSizeInput - minSizeInput) * t))
+
+//@function Price of a footprint row's centre (the traded price with 1 tick per row).
+rowPrice(volume_row r) =>
+    r.down_price() + (r.up_price() - r.down_price() - tick) / 2
+
+var float maxVol = 0.0
+
+newMarker(int side, float price, float v, float thr) =>
+    color c = side > 0 ? bullInput : bearInput
+    float vmax = math.max(maxVol, v)
+    int sz = circleSize(v, thr, vmax)
+    label lc = label.new(bar_index, price, "●", style = label.style_label_center, color = color.new(color.black, 100),
+         textcolor = color.new(c, fillTranspInput), size = sz)
+    label lr = ringInput ? label.new(bar_index, price, "○", style = label.style_label_center, color = color.new(color.black, 100),
+         textcolor = color.new(c, math.max(0, fillTranspInput - 45)), size = sz) : na
+    label lt = label.new(bar_index, price, volText(v), style = label.style_label_center, color = color.new(color.black, 100),
+         textcolor = textInput, size = textSizeInput, text_formatting = text.format_bold)
+    Marker.new(lc, lr, lt, bar_index, side, price, v, thr)
+
+// ───────────────────────────────────────────── detection on the current bar (live: every update)
+float mean = totN > 0 ? totS / totN : na
+float sd   = totN > 0 ? math.sqrt(math.max(0.0, totQ / totN - mean * mean)) : na
+float thr  = mean + kInput * sd
+bool  ready = totN >= minSamplesInput
+
+float bestBuy = 0.0
+float bestBuyPx = na
+float bestSell = 0.0
+float bestSellPx = na
+if not na(fp)
+    for r in fp.rows()
+        float b = r.buy_volume()
+        float s = r.sell_volume()
+        if b > bestBuy
+            bestBuy   := b
+            bestBuyPx := rowPrice(r)
+        if s > bestSell
+            bestSell   := s
+            bestSellPx := rowPrice(r)
+float bN = (bestBuy > 0 ? 1 : 0) + (bestSell > 0 ? 1 : 0)
+float bS = bestBuy + bestSell
+float bQ = bestBuy * bestBuy + bestSell * bestSell
+
+string alertMsg = ""
+if ready and not na(fp)
+    // strictly above the mean: a window of identical volumes (sd = 0) marks nothing
+    if sideInput != "Sellers only" and bestBuy >= thr and bestBuy > mean and bestBuy >= minVolInput
+        markers.push(newMarker(1, bestBuyPx, bestBuy, thr))
+        alertMsg += "heavy BUY " + volText(bestBuy) + " @ " + str.tostring(bestBuyPx, format.mintick) + "  "
+    if sideInput != "Buyers only" and bestSell >= thr and bestSell > mean and bestSell >= minVolInput
+        markers.push(newMarker(-1, bestSellPx, bestSell, thr))
+        alertMsg += "heavy SELL " + volText(bestSell) + " @ " + str.tostring(bestSellPx, format.mintick) + "  "
+
+// ───────────────────────────────────────────── bar close: statistics, budget, alert
+if barstate.isconfirmed and not na(fp)
+    wN.push(bN)
+    wS.push(bS)
+    wQ.push(bQ)
+    totN += bN
+    totS += bS
+    totQ += bQ
+    while wN.size() > lookbackInput
+        totN -= wN.shift()
+        totS -= wS.shift()
+        totQ -= wQ.shift()
+    for mk in markers
+        if mk.bar == bar_index
+            maxVol := math.max(maxVol, mk.volume)
+    while markers.size() > maxMarkersInput
+        Marker old = markers.shift()
+        old.circle.delete()
+        old.txt.delete()
+        if not na(old.ring)
+            old.ring.delete()
+    if alertInput and str.length(alertMsg) > 0
+        alert(syminfo.ticker + " " + alertMsg, alert.freq_once_per_bar_close)
+
+// relative sizing: the biggest marker on the chart sets the scale (recomputed on the last bar only)
+if barstate.islast and sizingInput == "Relative to markers" and markers.size() > 0
+    float vmax = 0.0
+    for mk in markers
+        vmax := math.max(vmax, mk.volume)
+    for mk in markers
+        int sz = circleSize(mk.volume, mk.threshold, vmax)
+        mk.circle.set_size(sz)
+        if not na(mk.ring)
+            mk.ring.set_size(sz)
+
+var table info = table.new(position.top_right, 1, 1)
+if barstate.islast
+    string msg = na(fp) ? "IDC Heavy Absorption: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
+         not ready ? "IDC Heavy Absorption: collecting statistics (" + str.tostring(totN) + "/" + str.tostring(minSamplesInput) + ")" : ""
+    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)

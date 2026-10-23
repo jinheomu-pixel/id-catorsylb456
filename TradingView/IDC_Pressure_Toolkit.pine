@@ -1,0 +1,307 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// IDCator - Pressure Toolkit (clean-room replica of the order-flow tool shown in ProfitPro's material; not their code)
+//
+// Pressure bubbles: prices inside a bar with unusually heavy, dominant aggressive volume (dim = weak, bright = strong).
+// Big trades: bubbles far above normal, outlined square + volume. Absorption dots: heavy volume traded in a wick
+// (red above an upper wick, green below a lower wick; bigger = enhanced). Absorption lines: the heavy wick prices,
+// extended right until price returns. Psychological levels: round numbers scaled to the instrument.
+// Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
+//@version=6
+indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, max_labels_count = 500, max_lines_count = 500, max_bars_back = 5000)
+
+// ───────────────────────────────────────────── inputs
+G_GEN = "General"
+int    rowTicksInput  = input.int(1, "Ticks per row", minval = 1, group = G_GEN)
+int    lookbackInput  = input.int(50, "Lookback bars (statistics)", minval = 5, maxval = 2000, group = G_GEN)
+
+G_BUB = "Pressure bubbles"
+bool   showBubblesInput = input.bool(true, "Show bubbles", group = G_BUB)
+float  weakKInput     = input.float(1.0, "Weak bubble (std dev)", minval = 0, step = 0.1, group = G_BUB,
+     tooltip = "Compared with the heaviest aggressive price of the recent bars (mean + k std dev).")
+float  strongKInput   = input.float(2.0, "Strong bubble (std dev)", minval = 0, step = 0.1, group = G_BUB)
+float  dominanceInput = input.float(1.5, "Dominance ratio vs opposite side", minval = 1, step = 0.1, group = G_BUB)
+int    maxPerSideInput = input.int(2, "Max bubbles per bar and side", minval = 1, maxval = 10, group = G_BUB)
+int    bubbleMinInput = input.int(14, "Bubble size min (pt)", minval = 4, maxval = 100, group = G_BUB)
+int    bubbleMaxInput = input.int(30, "Bubble size max (pt)", minval = 4, maxval = 120, group = G_BUB)
+int    weakTranspInput = input.int(72, "Weak bubble transparency %", minval = 0, maxval = 100, group = G_BUB)
+int    strongTranspInput = input.int(28, "Strong bubble transparency %", minval = 0, maxval = 100, group = G_BUB)
+
+G_BIG = "Big trades"
+bool   showBigInput   = input.bool(true, "Show big trades", group = G_BIG)
+float  bigKInput      = input.float(3.0, "Big trade (std dev)", minval = 0, step = 0.1, group = G_BIG,
+     tooltip = "A bubble whose price holds far more aggressive volume than the heaviest price of a normal bar (mean + k std dev of each bar's heaviest price). TradingView gives no individual trades to scripts.")
+int    bigSizeInput   = input.int(13, "Square size (pt)", minval = 4, maxval = 60, group = G_BIG)
+
+G_ABS = "Absorption"
+bool   showDotsInput  = input.bool(true, "Show absorption dots", group = G_ABS)
+float  absKInput      = input.float(1.0, "Wick level (std dev)", minval = 0, step = 0.1, group = G_ABS)
+float  enhKInput      = input.float(2.5, "Enhanced (std dev)", minval = 0, step = 0.1, group = G_ABS)
+float  minWickPctInput = input.float(15, "Min wick share of bar volume %", minval = 0, maxval = 100, group = G_ABS)
+bool   showLinesInput = input.bool(true, "Show absorption lines", group = G_ABS)
+int    maxLinesWickInput = input.int(8, "Max lines per wick", minval = 1, maxval = 30, group = G_ABS)
+int    lineTranspInput = input.int(20, "Line transparency %", minval = 0, maxval = 100, group = G_ABS)
+int    maxLinesInput  = input.int(400, "Max lines on chart", minval = 10, maxval = 440, group = G_ABS)
+
+G_PSY = "Psychological levels"
+bool   showPsychInput = input.bool(true, "Show psychological levels", group = G_PSY)
+float  psychStepInput = input.float(0, "Step (0 = auto, about 0.3% of price)", minval = 0, group = G_PSY)
+int    psychEachInput = input.int(6, "Levels each side", minval = 1, maxval = 20, group = G_PSY)
+int    psychMajorInput = input.int(4, "Major level every", minval = 1, group = G_PSY)
+color  psychColorInput = input.color(color.new(color.gray, 55), "Level color", group = G_PSY)
+
+G_COL = "Colors"
+color  buyColorInput  = input.color(color.rgb(46, 160, 90), "Buy", group = G_COL)
+color  sellColorInput = input.color(color.rgb(214, 46, 58), "Sell", group = G_COL)
+color  dotBullInput   = input.color(color.rgb(50, 205, 50), "Dot below lower wick", group = G_COL)
+color  dotBearInput   = input.color(color.rgb(198, 40, 40), "Dot above upper wick", group = G_COL)
+color  textColorInput = input.color(color.rgb(209, 212, 220), "Big trade text", group = G_COL)
+
+G_ALR = "Alerts (create one alert with 'Any alert() function call')"
+bool   alertBubbleInput = input.bool(false, "Strong bubbles", group = G_ALR)
+bool   alertBigInput  = input.bool(false, "Big trades", group = G_ALR)
+bool   alertDotInput  = input.bool(false, "Absorption dots", group = G_ALR)
+bool   alertLineInput = input.bool(false, "Absorption line retest", group = G_ALR)
+bool   alertPsychInput = input.bool(false, "Psychological level cross", group = G_ALR)
+
+// ───────────────────────────────────────────── data and state
+footprint fp = request.footprint(rowTicksInput)
+float tick = syminfo.mintick
+
+type ALine
+    line  ln
+    float price
+    int   bar
+    int   endBar = -1
+
+var array<ALine> lines = array.new<ALine>()
+// rolling statistics of the total volume per price (absorption)
+var array<float> lN = array.new_float()
+var array<float> lS = array.new_float()
+var array<float> lQ = array.new_float()
+// each closed bar's heaviest aggressive price (buy and sell side): the population for big trades
+var array<float> mN = array.new_float()
+var array<float> mS = array.new_float()
+var array<float> mQ = array.new_float()
+var float mTotN = 0.0
+var float mTotS = 0.0
+var float mTotQ = 0.0
+var float lTotN = 0.0
+var float lTotS = 0.0
+var float lTotQ = 0.0
+
+volText(float v) =>
+    float a = math.abs(v)
+    a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
+     a >= 1e4 ? str.tostring(v / 1e3, "#") + "k" :
+     a >= 1e3 ? str.tostring(v / 1e3, "#.#") + "k" :
+     str.tostring(math.round(v))
+
+rowPrice(volume_row r) =>
+    r.down_price() + (r.up_price() - r.down_price() - tick) / 2
+
+float lMean = lTotN > 0 ? lTotS / lTotN : na
+float lSd   = lTotN > 0 ? math.sqrt(math.max(0.0, lTotQ / lTotN - lMean * lMean)) : na
+bool  ready = mTotN >= 20 and lTotN >= 30
+float mMean = mTotN > 0 ? mTotS / mTotN : na
+float mSd   = mTotN > 0 ? math.sqrt(math.max(0.0, mTotQ / mTotN - mMean * mMean)) : na
+float weakThr   = mMean + weakKInput * mSd
+float strongThr = mMean + strongKInput * mSd
+float bigThr    = math.max(mMean + bigKInput * mSd, weakThr)
+float wickThr   = lMean + absKInput * lSd
+float enhThr    = lMean + enhKInput * lSd
+
+bubbleSize(float v) =>
+    float t = math.sqrt(math.max(0.0, math.min(1.0, (v / math.max(weakThr, 1e-9) - 1) / 3)))
+    int(math.round(bubbleMinInput + (bubbleMaxInput - bubbleMinInput) * t))
+
+string alertMsg = ""
+
+// ───────────────────────────────────────────── signals of the current bar (live: every update)
+if not na(fp)
+    array<volume_row> rows = fp.rows()
+    int n = rows.size()
+    float barTotal = fp.total_volume()
+    if ready and n > 0
+        // bubbles: the heaviest qualifying prices per side
+        array<float> bVol = array.new_float()
+        array<float> bPx  = array.new_float()
+        array<float> sVol = array.new_float()
+        array<float> sPx  = array.new_float()
+        for r in rows
+            float b = r.buy_volume()
+            float s = r.sell_volume()
+            if b >= weakThr and b > mMean and b > s and b >= dominanceInput * s
+                bVol.push(b)
+                bPx.push(rowPrice(r))
+            if s >= weakThr and s > mMean and s > b and s >= dominanceInput * b
+                sVol.push(s)
+                sPx.push(rowPrice(r))
+        for side = 0 to 1
+            array<float> vols = side == 0 ? bVol : sVol
+            array<float> pxs  = side == 0 ? bPx : sPx
+            color c = side == 0 ? buyColorInput : sellColorInput
+            if vols.size() > 0
+                array<int> idx = vols.sort_indices(order.descending)
+                for k = 0 to math.min(maxPerSideInput, idx.size()) - 1
+                    float v  = vols.get(idx.get(k))
+                    float px = pxs.get(idx.get(k))
+                    bool strong = v >= strongThr
+                    if showBubblesInput
+                        label.new(bar_index, px, "●", style = label.style_label_center, color = color.new(color.black, 100),
+                             textcolor = color.new(c, strong ? strongTranspInput : weakTranspInput), size = bubbleSize(v))
+                    if strong
+                        alertMsg += (side == 0 ? "strong buy bubble " : "strong sell bubble ") + str.tostring(px, format.mintick) + "  "
+                    if showBigInput and k == 0 and v >= bigThr
+                        label.new(bar_index, px, "□", style = label.style_label_center, color = color.new(color.black, 100),
+                             textcolor = side == 0 ? color.rgb(120, 230, 120) : color.rgb(240, 110, 100), size = bigSizeInput)
+                        label.new(bar_index, px, volText(v), style = side == 0 ? label.style_label_up : label.style_label_down,
+                             color = color.new(color.black, 100), textcolor = textColorInput, size = 9)
+                        alertMsg += "big " + (side == 0 ? "buy " : "sell ") + volText(v) + " @ " + str.tostring(px, format.mintick) + "  "
+        // absorption: heavy volume traded in a wick (rows outside the body)
+        float bodyTop = math.max(open, close)
+        float bodyBot = math.min(open, close)
+        for side = 0 to 1
+            bool atHigh = side == 0
+            float wickVol = 0.0
+            float maxLevel = 0.0
+            array<float> heavyPx  = array.new_float()
+            array<float> heavyVol = array.new_float()
+            for r in rows
+                bool inWick = atHigh ? r.down_price() > bodyTop + tick * 0.5 : r.up_price() - tick < bodyBot - tick * 0.5
+                if inWick
+                    float v = r.total_volume()
+                    wickVol  += v
+                    maxLevel := math.max(maxLevel, v)
+                    if v >= wickThr
+                        heavyPx.push(rowPrice(r))
+                        heavyVol.push(v)
+            bool dot = maxLevel >= wickThr and maxLevel > lMean and barTotal > 0 and wickVol / barTotal * 100 >= minWickPctInput
+            if dot
+                bool enhanced = maxLevel >= enhThr
+                if showDotsInput
+                    label.new(bar_index, atHigh ? high : low, "", yloc = atHigh ? yloc.abovebar : yloc.belowbar, style = label.style_circle,
+                         color = atHigh ? dotBearInput : dotBullInput, size = enhanced ? size.small : size.tiny)
+                alertMsg += (enhanced ? "enhanced " : "") + "absorption dot " + (atHigh ? "above " : "below ") + str.tostring(atHigh ? high : low, format.mintick) + "  "
+                // absorption lines from the heaviest wick prices, only once the bar is final
+                if showLinesInput and barstate.isconfirmed and heavyVol.size() > 0
+                    array<int> idx = heavyVol.sort_indices(order.descending)
+                    for k = 0 to math.min(maxLinesWickInput, idx.size()) - 1
+                        float px = heavyPx.get(idx.get(k))
+                        // aggressor that was absorbed: buyers at an upper wick (green), sellers at a lower wick (red)
+                        color c = atHigh ? buyColorInput : sellColorInput
+                        line l = line.new(bar_index, px, bar_index + 1, px, color = color.new(c, lineTranspInput), width = 1)
+                        lines.push(ALine.new(l, px, bar_index, -1))
+
+// ───────────────────────────────────────────── absorption lines: extend until price returns (gap aware)
+float hiR = math.max(high, nz(close[1], high))
+float loR = math.min(low, nz(close[1], low))
+for al in lines
+    if al.endBar < 0 and bar_index > al.bar
+        if al.price >= loR - tick * 0.25 and al.price <= hiR + tick * 0.25
+            al.endBar := bar_index
+            al.ln.set_x2(bar_index)
+            alertMsg += "absorption line retest " + str.tostring(al.price, format.mintick) + "  "
+        else
+            al.ln.set_x2(bar_index + 1)
+if barstate.isconfirmed
+    while lines.size() > maxLinesInput
+        int drop = 0
+        for [k, al] in lines
+            if al.endBar >= 0
+                drop := k
+                break
+        lines.remove(drop).ln.delete()
+
+// ───────────────────────────────────────────── psychological levels
+psychStep(float price) =>
+    float result = psychStepInput
+    if result <= 0 and price > 0
+        float target = price * 0.003
+        float mag = math.pow(10, math.floor(math.log10(target)))
+        result := 0
+        for m in array.from(1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0)
+            float st = mag * m
+            float ticks = st / tick
+            if st >= target * 0.75 and ticks >= 1 - 1e-9 and math.abs(ticks - math.round(ticks)) < 1e-6
+                result := math.round(ticks) * tick
+                break
+        if result <= 0
+            result := math.max(1, math.ceil(target / tick - 1e-9)) * tick
+    result
+
+var array<line> psychLines = array.new<line>()
+float pStep = psychStep(close)
+if showPsychInput and barstate.islast and pStep > 0
+    for l in psychLines
+        l.delete()
+    psychLines.clear()
+    int base = int(math.floor(close / pStep))
+    for k = -psychEachInput + 1 to psychEachInput
+        int lvl = base + k
+        bool major = lvl % psychMajorInput == 0
+        psychLines.push(line.new(bar_index - 1, lvl * pStep, bar_index, lvl * pStep, extend = extend.both,
+             color = psychColorInput, width = major ? 2 : 1, style = major ? line.style_solid : line.style_dotted))
+if alertPsychInput and pStep > 0 and not na(close[1]) and math.floor(close / pStep) != math.floor(close[1] / pStep)
+    alertMsg += "crossed psychological level " + str.tostring(math.max(math.floor(close / pStep), math.floor(close[1] / pStep)) * pStep, format.mintick) + "  "
+
+// ───────────────────────────────────────────── bar close: statistics of the bar join the window
+if barstate.isconfirmed and not na(fp)
+    float n2 = 0.0
+    float s2 = 0.0
+    float q2 = 0.0
+    float maxB = 0.0
+    float maxS = 0.0
+    for r in fp.rows()
+        float b = r.buy_volume()
+        float s = r.sell_volume()
+        float t = r.total_volume()
+        if t > 0
+            n2 += 1
+            s2 += t
+            q2 += t * t
+        maxB := math.max(maxB, b)
+        maxS := math.max(maxS, s)
+    float n3 = (maxB > 0 ? 1 : 0) + (maxS > 0 ? 1 : 0)
+    mN.push(n3)
+    mS.push(maxB + maxS)
+    mQ.push(maxB * maxB + maxS * maxS)
+    mTotN += n3
+    mTotS += maxB + maxS
+    mTotQ += maxB * maxB + maxS * maxS
+    while mN.size() > lookbackInput * 2
+        mTotN -= mN.shift()
+        mTotS -= mS.shift()
+        mTotQ -= mQ.shift()
+    lN.push(n2)
+    lS.push(s2)
+    lQ.push(q2)
+    lTotN += n2
+    lTotS += s2
+    lTotQ += q2
+    while lN.size() > lookbackInput
+        lTotN -= lN.shift()
+        lTotS -= lS.shift()
+        lTotQ -= lQ.shift()
+
+bool wantAlert = str.length(alertMsg) > 0 and (alertBubbleInput or alertBigInput or alertDotInput or alertLineInput or alertPsychInput)
+if wantAlert
+    // only the kinds that are switched on
+    string msg = ""
+    if alertBubbleInput and str.contains(alertMsg, "bubble")
+        msg += "bubble "
+    if alertBigInput and str.contains(alertMsg, "big ")
+        msg += "big-trade "
+    if alertDotInput and str.contains(alertMsg, "dot")
+        msg += "absorption-dot "
+    if alertLineInput and str.contains(alertMsg, "retest")
+        msg += "line-retest "
+    if alertPsychInput and str.contains(alertMsg, "psychological")
+        msg += "psych-cross "
+    if str.length(msg) > 0
+        alert(syminfo.ticker + " [" + msg + "] " + alertMsg, alert.freq_once_per_bar)
+
+var table info = table.new(position.top_right, 1, 1)
+if barstate.islast
+    string m = na(fp) ? "IDC Pressure Toolkit: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
+         not ready ? "IDC Pressure Toolkit: collecting statistics" : ""
+    table.cell(info, 0, 0, m, text_color = color.orange, text_size = 9)

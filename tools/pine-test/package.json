@@ -1,0 +1,13 @@
+{
+  "name": "idcator-pine-test",
+  "private": true,
+  "type": "module",
+  "description": "Runs the IDCator TradingView (Pine Script v6) indicators in PineTS on synthetic order-flow data",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "pinets": "^0.13.0",
+    "playwright": "^1.64.1"
+  }
+}
