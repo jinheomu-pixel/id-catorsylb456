@@ -25,7 +25,7 @@ TOOLS = [
     ('IDC_Heavy_Absorption.pine', 'ha', 'haOn', 'Heavy Absorption', True),
     ('IDC_Pressure_Toolkit.pine', 'ptk', 'ptkOn', 'Pressure Toolkit', False),
 ]
-SHARED = {'fp', 'tick', 'rowTicks', 'coinPrice', 'niceRow', 'autoTicks', 'anyFp', 'typRange', 'rowHint', 'rowTicksInput'}
+SHARED = {'fp', 'tick', 'rowTicks', 'refPrice', 'niceRow', 'autoTicks', 'anyFp', 'typRange', 'rowHint', 'rowTicksInput'}
 # drawing caps in the suite (pattern in the tool's input line -> replacement)
 CAPS = {
     'hvn': [('input.int(200, "Max zones on chart", minval = 10, maxval = 240', 'input.int(100, "Max zones on chart", minval = 10, maxval = 100')],

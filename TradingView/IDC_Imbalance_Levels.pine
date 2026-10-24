@@ -11,7 +11,7 @@ indicator("IDC Imbalance Levels", "IDC Imbalance", overlay = true, max_boxes_cou
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"
 int    rowTicksInput   = input.int(0, "Ticks per row (0 = auto)", minval = 0, group = G_DET,
-     tooltip = "0 = auto: 1 tick on futures and stocks; on crypto about 20 rows across a typical bar of this timeframe. The Data Window shows the value in use.")
+     tooltip = "0 = auto: 1 tick on futures and stocks; on crypto and spot metals about 20 rows across a typical bar of this timeframe. The Data Window shows the value in use.")
 float  minRatioInput   = input.float(5.0, "Min imbalance ratio", minval = 1.1, step = 0.5, group = G_DET,
      tooltip = "Diagonal comparison: buy volume at a price vs sell volume one row lower (and sell vs buy one row higher).")
 int    minStackInput   = input.int(3, "Min stacked levels", minval = 1, group = G_DET)
@@ -41,70 +41,53 @@ bool   alertTouchInput = input.bool(true, "Alert when price touches a zone", gro
      tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
 
 // ───────────────────────────────────────────── data
-//@variable Footprint of the current bar (`na` without footprint data).
 // ───────────────────────────────────────────── footprint row size
-//@function Rough dollar price of a coin, known when the script loads (na when it is not listed).
-// Only the order of magnitude matters: a price off by 2x moves the row size by one step.
-coinPrice(string coin) =>
-    switch coin
-        "BTC"    => 100000.0
-        "WBTC"   => 100000.0
-        "ETH"    => 3500.0
-        "WETH"   => 3500.0
-        "BNB"    => 700.0
-        "SOL"    => 180.0
-        "XRP"    => 2.5
-        "DOGE"   => 0.25
-        "ADA"    => 0.8
-        "TRX"    => 0.3
-        "AVAX"   => 30.0
-        "LINK"   => 20.0
-        "DOT"    => 6.0
-        "TON"    => 4.0
-        "SHIB"   => 0.000015
-        "PEPE"   => 0.00001
-        "BONK"   => 0.00002
-        "FLOKI"  => 0.0001
-        "LTC"    => 100.0
-        "BCH"    => 450.0
-        "XLM"    => 0.35
-        "SUI"    => 3.5
-        "NEAR"   => 4.0
-        "APT"    => 8.0
-        "UNI"    => 10.0
-        "ATOM"   => 6.0
-        "ETC"    => 22.0
-        "FIL"    => 4.0
-        "ARB"    => 0.6
-        "OP"     => 1.5
-        "INJ"    => 20.0
-        "HBAR"   => 0.25
-        "ICP"    => 8.0
-        "AAVE"   => 250.0
-        "MKR"    => 1500.0
-        "WIF"    => 1.5
-        "SEI"    => 0.4
-        "TIA"    => 4.0
-        "RENDER" => 6.0
-        "FET"    => 1.2
-        "IMX"    => 1.2
-        "STX"    => 1.5
-        "LDO"    => 1.5
-        "CRV"    => 0.6
-        "HYPE"   => 30.0
-        "ENA"    => 0.6
-        "JUP"    => 0.8
-        "TAO"    => 400.0
-        "XMR"    => 300.0
-        "ZEC"    => 50.0
-        "ONDO"   => 1.0
-        "WLD"    => 1.5
-        "TRUMP"  => 10.0
-        "PENGU"  => 0.02
-        "KAS"    => 0.1
-        "ALGO"   => 0.3
-        "VET"    => 0.04
-        => na
+// request.footprint() needs a "simple" row size, known when the script loads: everything below is plain expressions
+// on syminfo / timeframe / inputs (no switch, if, loop or :=, whose results are "series").
+
+//@function Rough dollar price of a coin or a spot metal (na when it is not listed). Only the order of magnitude
+// matters: a price off by 2x moves the row size by one step.
+refPrice(string c) =>
+    c == "BTC" or c == "WBTC" ? 100000.0 :
+         c == "ETH" or c == "WETH" ? 3500.0 :
+         c == "BNB" ? 700.0 :
+         c == "SOL" ? 180.0 :
+         c == "XRP" ? 2.5 :
+         c == "DOGE" or c == "HBAR" ? 0.25 :
+         c == "ADA" or c == "JUP" ? 0.8 :
+         c == "TRX" or c == "ALGO" ? 0.3 :
+         c == "AVAX" or c == "HYPE" ? 30.0 :
+         c == "LINK" or c == "INJ" ? 20.0 :
+         c == "DOT" or c == "ATOM" or c == "RENDER" ? 6.0 :
+         c == "TON" or c == "NEAR" or c == "FIL" or c == "TIA" ? 4.0 :
+         c == "SHIB" ? 0.000015 :
+         c == "PEPE" ? 0.00001 :
+         c == "BONK" ? 0.00002 :
+         c == "FLOKI" ? 0.0001 :
+         c == "LTC" ? 100.0 :
+         c == "BCH" ? 450.0 :
+         c == "XLM" ? 0.35 :
+         c == "SUI" ? 3.5 :
+         c == "APT" or c == "ICP" ? 8.0 :
+         c == "UNI" or c == "TRUMP" ? 10.0 :
+         c == "ETC" ? 22.0 :
+         c == "ARB" or c == "CRV" or c == "ENA" ? 0.6 :
+         c == "OP" or c == "WIF" or c == "STX" or c == "LDO" or c == "WLD" ? 1.5 :
+         c == "AAVE" ? 250.0 :
+         c == "MKR" ? 1500.0 :
+         c == "SEI" ? 0.4 :
+         c == "FET" or c == "IMX" ? 1.2 :
+         c == "TAO" ? 400.0 :
+         c == "XMR" ? 300.0 :
+         c == "ZEC" ? 50.0 :
+         c == "ONDO" ? 1.0 :
+         c == "PENGU" ? 0.02 :
+         c == "KAS" ? 0.1 :
+         c == "VET" ? 0.04 :
+         c == "XAU" ? 4000.0 :
+         c == "XAG" ? 50.0 :
+         c == "XPT" ? 1500.0 :
+         c == "XPD" ? 1200.0 : na
 
 //@function A round price step near `px`: 1, 2, 2.5 or 5 times a power of ten.
 niceRow(float px) =>
@@ -112,17 +95,23 @@ niceRow(float px) =>
     float f   = px / mag
     (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag
 
-//@function Footprint ticks per row: `manual` when above 0, else automatic. Futures and stocks: 1 tick. Crypto (its tick
-// is tiny next to its price): about 20 rows across a typical bar of the chart's timeframe (3 % daily range).
+//@function Footprint ticks per row: `manual` when above 0, else automatic. Futures and stocks: 1 tick. Crypto and
+// spot metals (their tick is tiny next to their price): about 20 rows across a typical bar of the chart's timeframe
+// (daily range: 3 % crypto, 1.5 % metals).
 autoTicks(int manual) =>
-    float mt     = syminfo.mintick
-    bool  dollar = str.contains(",USD,USDT,USDC,FDUSD,BUSD,USDE,DAI,TUSD,PYUSD,USD1,EUR,GBP,", "," + syminfo.currency + ",")
+    float  mt     = syminfo.mintick
+    string cur    = syminfo.currency
+    bool   dollar = cur == "USD" or cur == "USDT" or cur == "USDC" or cur == "FDUSD" or cur == "BUSD" or cur == "USDE" or
+         cur == "DAI" or cur == "TUSD" or cur == "PYUSD" or cur == "USD1" or cur == "EUR" or cur == "GBP"
+    bool   crypto = syminfo.type == "crypto"
+    float  known  = dollar ? refPrice(syminfo.basecurrency) : na
     // a coin not listed, or not quoted in dollars: most coins are quoted with about 5 significant digits
-    float price  = syminfo.type == "crypto" ? nz(dollar ? coinPrice(syminfo.basecurrency) : na, mt * 30000) : na
-    float rowPx  = niceRow(price * 0.03 * math.sqrt(timeframe.in_seconds() / 86400) / 20)
+    float  price  = crypto ? nz(known, mt * 30000) : syminfo.type != "futures" and syminfo.type != "stock" ? known : na
+    float  rowPx  = niceRow(price * (crypto ? 0.03 : 0.015) * math.sqrt(timeframe.in_seconds() / 86400) / 20)
     manual > 0 ? manual : na(price) ? 1 : math.max(1, int(math.round(rowPx / mt)))
 
 int rowTicks = autoTicks(rowTicksInput)
+//@variable Footprint of the current bar (`na` without footprint data).
 footprint fp = request.footprint(rowTicks)
 plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 

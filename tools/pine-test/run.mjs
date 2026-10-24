@@ -5,9 +5,10 @@
 // Every scenario runs the real .pine file from TradingView/ in PineTS (LuxAlgo's open-source Pine Script v6 runtime)
 // on hand-built or simulated order flow; --render also writes PNG charts to tools/pine-test/out/.
 // Exit code = number of failed scenarios.
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser, ALIASES } from './harness.mjs';
+import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser, ALIASES, resolveScript } from './harness.mjs';
 import { Tape, Live, barStart } from './tape.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -444,7 +445,7 @@ function btcMarket(barSec = 60) {
 const ticksUsed = (ctx, title = 'Ticks per row') => (ctx.plots?.[title] ?? ctx.plots?.['Ticks per row'])?.data?.at(-1)?.value;
 const status = (ctx) => drawings(ctx).tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.text ?? '').join(' ').trim();
 
-scenario('CRY-01 auto row size per coin and timeframe', 'crypto: about 20 rows per typical bar (BTC 1m $5, 15s $2, ETH 1m $0.10); 1 tick on futures; manual value wins', async (c) => {
+scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals: about 20 rows per typical bar (BTC 1m $5, 15s $2, ETH 1m $0.10, XAUUSD 1m $0.10); 1 tick on futures and forex; manual value wins', async (c) => {
     const nq15 = makeMarket({ seed: 5, segments: [{ bars: 30 }] });
     const nq60 = makeMarket({ seed: 5, barSec: 60, segments: [{ bars: 30 }] });
     const cases = [
@@ -455,6 +456,8 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto: about 20 rows p
         ['unlisted coin 1m', nq60, { ...BTC, basecurrency: 'ABCD', mintick: 0.0001 }, {}, 1],
         ['ETH/BTC 1m (not in dollars)', nq60, { ...BTC, basecurrency: 'ETH', currency: 'BTC', mintick: 0.00001 }, {}, 1],
         ['NQ futures 15s', nq15, {}, {}, 1],
+        ['OANDA:XAUUSD 1m (spot gold, tick 0.001): $0.10 rows', nq60, { type: 'cfd', basecurrency: 'XAU', currency: 'USD', mintick: 0.001, ticker: 'XAUUSD', tickerid: 'OANDA:XAUUSD', prefix: 'OANDA' }, {}, 100],
+        ['EURUSD 1m (forex)', nq60, { type: 'forex', basecurrency: 'EUR', currency: 'USD', mintick: 0.00001, ticker: 'EURUSD', tickerid: 'OANDA:EURUSD', prefix: 'OANDA' }, {}, 1],
         ['BTC/USDT 1m, manual 7', nq60, BTC, { 'Ticks per row (0 = auto)': 7 }, 7],
     ];
     for (const [name, m, info, inputs, want] of cases) {
@@ -463,6 +466,22 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto: about 20 rows p
     }
     const hvn = await runPine(HVN, nq60, {}, { info: BTC });
     c.eq(500, ticksUsed(hvn, 'Footprint ticks per row'), 'HVN BTC/USDT 1m: footprint ticks per row');
+});
+
+scenario('QUAL-01 footprint row size is "simple"', 'TradingView compiles request.footprint() only with a "simple int" row size: the code that computes it uses no switch / if / loop / := / var, history or bar data (PineTS does not check qualifiers)', async (c) => {
+    for (const file of [IMB, HVN, HA, PTK, path.join(TV, 'IDC_OrderFlow.pine')]) {
+        const real = resolveScript(file).file;
+        const name = path.basename(real);
+        const src = fs.readFileSync(real, 'utf8');
+        const i = src.indexOf('footprint row size');
+        const j = src.indexOf('request.footprint(', i);
+        c.check(i > 0 && j > i, `${name}: row size section found`);
+        const code = src.slice(i, j).split('\n').map((l) => l.replace(/\/\/.*$/, '').replace(/"(?:[^"\\]|\\.)*"/g, '""')).join('\n');
+        for (const [what, re] of [['switch', /\bswitch\b/], ['if', /\bif\b/], ['loop', /\b(for|while)\b/], [':=', /:=/], ['var', /\bvar(ip)?\b/],
+            ['history []', /\[/], ['ta./request./array./map.', /\b(ta|request|array|map)\./], ['bar data', /\b(open|high|low|close|volume|time|bar_index|hl2|hlc3|ohlc4)\b(?!\s*\()/]]) {
+            c.check(!re.test(code), `${name}: no ${what} in the row size code`);
+        }
+    }
 });
 
 scenario('CRY-02 Bitcoin session', 'all four on simulated BTC/USDT 1m: footprint available, zones and circles drawn, labels keep decimals (e.g. "7.5x | 2.35")', async (c) => {

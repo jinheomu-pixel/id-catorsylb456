@@ -59,6 +59,11 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
 - Futures crypto CME (`CME:BTC1!`, `CME:MBT1!`, `CME:ETH1!`) adalah futures, jadi barisnya 1 tick (tick-nya sudah besar, misalnya $5).
 - Kalau muncul *no footprint data* di pair yang punya volume, cek dulu paket TradingView (Premium/Ultimate). Lalu coba simbol bursa lain.
 
+## Emas dan logam spot (XAUUSD)
+
+- Di simbol seperti `OANDA:XAUUSD` tick-nya 0.001, jauh lebih kecil dari harganya. Jadi ukuran baris otomatis juga dipakai di sini: di 1 menit barisnya $0.10 (100 tick). Perak, platinum, dan paladium (`XAG`, `XPT`, `XPD`) juga dikenali.
+- Volume di simbol CFD/broker (OANDA, FXCM, dan sejenisnya) adalah volume broker itu sendiri, bukan volume bursa. Untuk order flow emas yang sebenarnya, pakai futures `COMEX:GC1!` atau `COMEX:MGC1!` (barisnya 1 tick = $0.10).
+
 ## Alert
 
 Klik ikon jam alarm, pilih **Condition** = nama indikator, lalu **Any alert() function call**. Atur sumber alert di setting tiap indikator:
@@ -95,7 +100,8 @@ Tampilan live bisa dimatikan per alat di setting (*Show the forming bar's stacks
 Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Script open-source dari LuxAlgo) memakai data order-flow buatan. Tesnya mencakup:
 - hasil per indikator (label, warna, posisi zona);
 - update tick-per-tick (zona berhenti di tick yang menyentuh, angka lingkaran naik live);
-- crypto: ukuran baris otomatis per koin dan timeframe, sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat;
+- crypto dan emas: ukuran baris otomatis per koin dan timeframe (juga `OANDA:XAUUSD`), sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat;
+- tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan kode ukuran baris di kelima file tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
 - live: kotak/node/garis putus-putus selama bar berjalan yang menjadi permanen saat close, dan alert live Heavy Absorption;
 - IDC Order Flow: dengan satu alat menyala hasilnya sama persis dengan file terpisahnya. Dengan semua menyala, hasilnya sama dengan gabungan keempatnya (NQ dan Bitcoin). Skenario realtime juga dijalankan pada IDC Order Flow (`--suite`).
 
@@ -106,7 +112,7 @@ Jalankan:
 ```
 cd tools/pine-test
 npm install
-node run.mjs --verbose          # 22 skenario (crypto, live, IDC Order Flow)
+node run.mjs --verbose          # 23 skenario (crypto, emas, live, IDC Order Flow)
 node run.mjs --suite IMB HVN HA PTK   # skenario alat dijalankan pada IDC Order Flow
 node run.mjs --render           # + gambar di tools/pine-test/out/
 node preview.mjs out/preview.png
