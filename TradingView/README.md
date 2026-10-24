@@ -101,7 +101,7 @@ Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Sc
 - hasil per indikator (label, warna, posisi zona);
 - update tick-per-tick (zona berhenti di tick yang menyentuh, angka lingkaran naik live);
 - crypto dan emas: ukuran baris otomatis per koin dan timeframe (juga `OANDA:XAUUSD`), sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat;
-- tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan kode ukuran baris di kelima file tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
+- tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan ukuran baris di kelima file dihitung di level atas script hanya dengan fungsi bawaan. Fungsi buatan sendiri tidak dipakai di situ, karena Pine menganggap parameternya *series*. Bagian itu juga tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
 - live: kotak/node/garis putus-putus selama bar berjalan yang menjadi permanen saat close, dan alert live Heavy Absorption;
 - IDC Order Flow: dengan satu alat menyala hasilnya sama persis dengan file terpisahnya. Dengan semua menyala, hasilnya sama dengan gabungan keempatnya (NQ dan Bitcoin). Skenario realtime juga dijalankan pada IDC Order Flow (`--suite`).
 

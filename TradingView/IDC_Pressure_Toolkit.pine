@@ -68,75 +68,70 @@ bool   alertPsychInput = input.bool(false, "Psychological level cross", group = 
 
 // ───────────────────────────────────────────── data and state
 // ───────────────────────────────────────────── footprint row size
-// request.footprint() needs a "simple" row size, known when the script loads: everything below is plain expressions
-// on syminfo / timeframe / inputs (no switch, if, loop or :=, whose results are "series").
+// request.footprint() takes a "simple int" row size, fixed when the script loads. Pine treats the parameters of our own
+// functions as "series", so the size is worked out here at the top level, from syminfo and timeframe only: plain
+// expressions, no function of ours, no switch, if, loop or :=.
+// Futures and stocks: 1 tick. Crypto and spot metals (their tick is tiny next to their price): about 20 rows across a
+// typical bar of the chart's timeframe (daily range: 3 % crypto, 1.5 % metals).
+string rowCoin      = syminfo.basecurrency
+string rowQuote     = syminfo.currency
+bool   rowInDollars = rowQuote == "USD" or rowQuote == "USDT" or rowQuote == "USDC" or rowQuote == "FDUSD" or rowQuote == "BUSD" or
+     rowQuote == "USDE" or rowQuote == "DAI" or rowQuote == "TUSD" or rowQuote == "PYUSD" or rowQuote == "USD1" or rowQuote == "EUR" or rowQuote == "GBP"
+//@variable Rough dollar price of a coin or a spot metal, 0 when it is not listed. Only the order of magnitude matters:
+// a price off by 2x moves the row size by one step.
+float  rowListedPx  = not rowInDollars ? 0.0 :
+     rowCoin == "BTC" or rowCoin == "WBTC" ? 100000.0 :
+     rowCoin == "ETH" or rowCoin == "WETH" ? 3500.0 :
+     rowCoin == "BNB" ? 700.0 :
+     rowCoin == "SOL" ? 180.0 :
+     rowCoin == "XRP" ? 2.5 :
+     rowCoin == "DOGE" or rowCoin == "HBAR" ? 0.25 :
+     rowCoin == "ADA" or rowCoin == "JUP" ? 0.8 :
+     rowCoin == "TRX" or rowCoin == "ALGO" ? 0.3 :
+     rowCoin == "AVAX" or rowCoin == "HYPE" ? 30.0 :
+     rowCoin == "LINK" or rowCoin == "INJ" ? 20.0 :
+     rowCoin == "DOT" or rowCoin == "ATOM" or rowCoin == "RENDER" ? 6.0 :
+     rowCoin == "TON" or rowCoin == "NEAR" or rowCoin == "FIL" or rowCoin == "TIA" ? 4.0 :
+     rowCoin == "SHIB" ? 0.000015 :
+     rowCoin == "PEPE" ? 0.00001 :
+     rowCoin == "BONK" ? 0.00002 :
+     rowCoin == "FLOKI" ? 0.0001 :
+     rowCoin == "LTC" ? 100.0 :
+     rowCoin == "BCH" ? 450.0 :
+     rowCoin == "XLM" ? 0.35 :
+     rowCoin == "SUI" ? 3.5 :
+     rowCoin == "APT" or rowCoin == "ICP" ? 8.0 :
+     rowCoin == "UNI" or rowCoin == "TRUMP" ? 10.0 :
+     rowCoin == "ETC" ? 22.0 :
+     rowCoin == "ARB" or rowCoin == "CRV" or rowCoin == "ENA" ? 0.6 :
+     rowCoin == "OP" or rowCoin == "WIF" or rowCoin == "STX" or rowCoin == "LDO" or rowCoin == "WLD" ? 1.5 :
+     rowCoin == "AAVE" ? 250.0 :
+     rowCoin == "MKR" ? 1500.0 :
+     rowCoin == "SEI" ? 0.4 :
+     rowCoin == "FET" or rowCoin == "IMX" ? 1.2 :
+     rowCoin == "TAO" ? 400.0 :
+     rowCoin == "XMR" ? 300.0 :
+     rowCoin == "ZEC" ? 50.0 :
+     rowCoin == "ONDO" ? 1.0 :
+     rowCoin == "PENGU" ? 0.02 :
+     rowCoin == "KAS" ? 0.1 :
+     rowCoin == "VET" ? 0.04 :
+     rowCoin == "XAU" ? 4000.0 :
+     rowCoin == "XAG" ? 50.0 :
+     rowCoin == "XPT" ? 1500.0 :
+     rowCoin == "XPD" ? 1200.0 : 0.0
+bool   rowIsCrypto  = syminfo.type == "crypto"
+// a coin not listed, or not quoted in dollars: most coins are quoted with about 5 significant digits
+float  rowRefPx     = rowIsCrypto and rowListedPx == 0 ? syminfo.mintick * 30000 :
+     syminfo.type == "futures" or syminfo.type == "stock" ? 0.0 : rowListedPx
+float  rowRaw       = rowRefPx * (rowIsCrypto ? 0.03 : 0.015) * math.sqrt(timeframe.in_seconds() / 86400) / 20
+float  rowMag       = math.pow(10, math.floor(math.log10(rowRaw)))
+float  rowF         = rowRaw / rowMag
+//@variable Automatic footprint ticks per row: the row rounded to 1, 2, 2.5 or 5 times a power of ten, in ticks.
+int    autoRow      = rowRefPx <= 0 ? 1 :
+     math.max(1, int(math.round((rowF < 1.5 ? 1.0 : rowF < 2.25 ? 2.0 : rowF < 3.5 ? 2.5 : rowF < 7.5 ? 5.0 : 10.0) * rowMag / syminfo.mintick)))
 
-//@function Rough dollar price of a coin or a spot metal (na when it is not listed). Only the order of magnitude
-// matters: a price off by 2x moves the row size by one step.
-refPrice(string c) =>
-    c == "BTC" or c == "WBTC" ? 100000.0 :
-         c == "ETH" or c == "WETH" ? 3500.0 :
-         c == "BNB" ? 700.0 :
-         c == "SOL" ? 180.0 :
-         c == "XRP" ? 2.5 :
-         c == "DOGE" or c == "HBAR" ? 0.25 :
-         c == "ADA" or c == "JUP" ? 0.8 :
-         c == "TRX" or c == "ALGO" ? 0.3 :
-         c == "AVAX" or c == "HYPE" ? 30.0 :
-         c == "LINK" or c == "INJ" ? 20.0 :
-         c == "DOT" or c == "ATOM" or c == "RENDER" ? 6.0 :
-         c == "TON" or c == "NEAR" or c == "FIL" or c == "TIA" ? 4.0 :
-         c == "SHIB" ? 0.000015 :
-         c == "PEPE" ? 0.00001 :
-         c == "BONK" ? 0.00002 :
-         c == "FLOKI" ? 0.0001 :
-         c == "LTC" ? 100.0 :
-         c == "BCH" ? 450.0 :
-         c == "XLM" ? 0.35 :
-         c == "SUI" ? 3.5 :
-         c == "APT" or c == "ICP" ? 8.0 :
-         c == "UNI" or c == "TRUMP" ? 10.0 :
-         c == "ETC" ? 22.0 :
-         c == "ARB" or c == "CRV" or c == "ENA" ? 0.6 :
-         c == "OP" or c == "WIF" or c == "STX" or c == "LDO" or c == "WLD" ? 1.5 :
-         c == "AAVE" ? 250.0 :
-         c == "MKR" ? 1500.0 :
-         c == "SEI" ? 0.4 :
-         c == "FET" or c == "IMX" ? 1.2 :
-         c == "TAO" ? 400.0 :
-         c == "XMR" ? 300.0 :
-         c == "ZEC" ? 50.0 :
-         c == "ONDO" ? 1.0 :
-         c == "PENGU" ? 0.02 :
-         c == "KAS" ? 0.1 :
-         c == "VET" ? 0.04 :
-         c == "XAU" ? 4000.0 :
-         c == "XAG" ? 50.0 :
-         c == "XPT" ? 1500.0 :
-         c == "XPD" ? 1200.0 : na
-
-//@function A round price step near `px`: 1, 2, 2.5 or 5 times a power of ten.
-niceRow(float px) =>
-    float mag = math.pow(10, math.floor(math.log10(px)))
-    float f   = px / mag
-    (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag
-
-//@function Footprint ticks per row: `manual` when above 0, else automatic. Futures and stocks: 1 tick. Crypto and
-// spot metals (their tick is tiny next to their price): about 20 rows across a typical bar of the chart's timeframe
-// (daily range: 3 % crypto, 1.5 % metals).
-autoTicks(int manual) =>
-    float  mt     = syminfo.mintick
-    string cur    = syminfo.currency
-    bool   dollar = cur == "USD" or cur == "USDT" or cur == "USDC" or cur == "FDUSD" or cur == "BUSD" or cur == "USDE" or
-         cur == "DAI" or cur == "TUSD" or cur == "PYUSD" or cur == "USD1" or cur == "EUR" or cur == "GBP"
-    bool   crypto = syminfo.type == "crypto"
-    float  known  = dollar ? refPrice(syminfo.basecurrency) : na
-    // a coin not listed, or not quoted in dollars: most coins are quoted with about 5 significant digits
-    float  price  = crypto ? nz(known, mt * 30000) : syminfo.type != "futures" and syminfo.type != "stock" ? known : na
-    float  rowPx  = niceRow(price * (crypto ? 0.03 : 0.015) * math.sqrt(timeframe.in_seconds() / 86400) / 20)
-    manual > 0 ? manual : na(price) ? 1 : math.max(1, int(math.round(rowPx / mt)))
-
-int rowTicks = autoTicks(rowTicksInput)
+int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow
 footprint fp = request.footprint(rowTicks)
 plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
@@ -406,6 +401,12 @@ if not na(fp)
 
 // typical bar range of this chart, for the row size hint
 float typRange = ta.sma(high - low, 100)
+
+//@function A round price step near `px`: 1, 2, 2.5 or 5 times a power of ten.
+niceRow(float px) =>
+    float mag = math.pow(10, math.floor(math.log10(px)))
+    float f   = px / mag
+    (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag
 
 //@function Status text when the row size does not suit the chart, "" when it does. `fine`: also hint when the rows are
 // much finer or coarser than about 20 per typical bar.

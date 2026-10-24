@@ -25,7 +25,7 @@ TOOLS = [
     ('IDC_Heavy_Absorption.pine', 'ha', 'haOn', 'Heavy Absorption', True),
     ('IDC_Pressure_Toolkit.pine', 'ptk', 'ptkOn', 'Pressure Toolkit', False),
 ]
-SHARED = {'fp', 'tick', 'rowTicks', 'refPrice', 'niceRow', 'autoTicks', 'anyFp', 'typRange', 'rowHint', 'rowTicksInput'}
+SHARED = {'fp', 'tick', 'rowTicks', 'autoRow', 'niceRow', 'anyFp', 'typRange', 'rowHint', 'rowTicksInput'}
 # drawing caps in the suite (pattern in the tool's input line -> replacement)
 CAPS = {
     'hvn': [('input.int(200, "Max zones on chart", minval = 10, maxval = 240', 'input.int(100, "Max zones on chart", minval = 10, maxval = 100')],
@@ -121,7 +121,7 @@ def tool_body(path, prefix, switch, title):
 
 def main():
     first = open(os.path.join(TV, 'IDC_Imbalance_Levels.pine')).read()
-    shared_rows = first[first.index('// ───────────────────────────────────────────── footprint row size'):first.index('int rowTicks = autoTicks(rowTicksInput)')]
+    shared_rows = first[first.index('// ───────────────────────────────────────────── footprint row size'):first.index('int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow')]
     hint = first[first.index('// typical bar range of this chart, for the row size hint'):first.index('var table info = table.new(')]
     tip = re.search(r'int    rowTicksInput   = input\.int\(0, "Ticks per row \(0 = auto\)", minval = 0, group = G_DET,\n     (tooltip = "[^"]*")\)', first).group(1)
     parts, maps = [], {}
@@ -149,7 +149,7 @@ int    rowTicksInput = input.int(0, "Ticks per row (0 = auto)", minval = 0, grou
      %s)
 
 %s
-int rowTicks = autoTicks(rowTicksInput)
+int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow
 footprint fp = request.footprint(rowTicks)
 plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick

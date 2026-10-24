@@ -468,7 +468,7 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals:
     c.eq(500, ticksUsed(hvn, 'Footprint ticks per row'), 'HVN BTC/USDT 1m: footprint ticks per row');
 });
 
-scenario('QUAL-01 footprint row size is "simple"', 'TradingView compiles request.footprint() only with a "simple int" row size: the code that computes it uses no switch / if / loop / := / var, history or bar data (PineTS does not check qualifiers)', async (c) => {
+scenario('QUAL-01 footprint row size is "simple"', 'TradingView compiles request.footprint() only with a "simple int" row size: it is computed at the top level with built-ins only (Pine treats the parameters of user-defined functions as "series"), and no switch / if / loop / := / var, history or bar data (PineTS does not check qualifiers)', async (c) => {
     for (const file of [IMB, HVN, HA, PTK, path.join(TV, 'IDC_OrderFlow.pine')]) {
         const real = resolveScript(file).file;
         const name = path.basename(real);
@@ -481,6 +481,10 @@ scenario('QUAL-01 footprint row size is "simple"', 'TradingView compiles request
             ['history []', /\[/], ['ta./request./array./map.', /\b(ta|request|array|map)\./], ['bar data', /\b(open|high|low|close|volume|time|bar_index|hl2|hlc3|ohlc4)\b(?!\s*\()/]]) {
             c.check(!re.test(code), `${name}: no ${what} in the row size code`);
         }
+        c.check(!/=>/.test(code), `${name}: no function defined in the row size code`);
+        const ALLOWED = new Set(['math.pow', 'math.floor', 'math.log10', 'math.sqrt', 'math.round', 'math.max', 'int', 'timeframe.in_seconds']);
+        const calls = [...code.matchAll(/([A-Za-z_][\w.]*)\s*\(/g)].map((m) => m[1]).filter((f) => !ALLOWED.has(f));
+        c.check(!calls.length, `${name}: only simple-preserving built-ins in the row size code, found ${[...new Set(calls)].join(', ')}`);
     }
 });
 
