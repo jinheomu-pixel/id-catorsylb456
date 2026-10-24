@@ -65,6 +65,18 @@ export function makeMarket({ seed = 1, start = Date.UTC(2026, 2, 2, 14, 30, 0), 
     return aggregate(trades, { start, barSec, tick, bars: bar });
 }
 
+/**
+ * The same order flow at another price level, e.g. Bitcoin: each 0.25 point move of the NQ-like simulation becomes `step`,
+ * prices sit on a `tick` grid and sizes are scaled to fractional lots (crypto volume in coins). `jitter` (ticks) spreads the
+ * trades of each step over that many ticks above it, as real coins trade at every tick (0 = exactly on the steps).
+ */
+export function scaleMarket(m, { price = 100000, step = 5, tick = 0.01, sizeScale = 0.01, base = 25000, jitter = 0 } = {}) {
+    const k = step / m.tick;
+    const off = (i) => (jitter > 0 ? ((Math.imul(i + 1, 2654435761) >>> 0) % jitter) * tick : 0);
+    const trades = m.trades.map((t, i) => ({ ...t, price: round(price + (t.price - base) * k + off(i), tick), size: Math.round(t.size * sizeScale * 1e4) / 1e4 }));
+    return aggregate(trades, { start: m.start, barSec: m.barSec, tick, bars: m.candles.length });
+}
+
 /** Candles + footprints (price -> buy/sell) from a trade list. */
 export function aggregate(trades, { start, barSec, tick, bars }) {
     const candles = [], footprints = [];
@@ -92,7 +104,7 @@ export function aggregate(trades, { start, barSec, tick, bars }) {
 }
 
 // ───────────────────────────────────────────── PineTS
-export function provider(market, { symbol = 'NQ1!', withFootprint = true } = {}) {
+export function provider(market, { symbol = 'NQ1!', withFootprint = true, info = {} } = {}) {
     const p = {
         getMarketData: async (_t, _tf, _limit, sDate, eDate) =>
             market.candles.filter((c) => (sDate === undefined || c.openTime >= sDate) && (eDate === undefined || c.openTime <= eDate)),
@@ -100,6 +112,7 @@ export function provider(market, { symbol = 'NQ1!', withFootprint = true } = {})
             ticker: symbol, tickerid: 'CME_MINI:' + symbol, prefix: 'CME_MINI', description: 'E-mini Nasdaq-100 Futures',
             type: 'futures', mintick: market.tick, pricescale: Math.round(1 / market.tick), minmove: 1,
             currency: 'USD', timezone: 'America/Chicago', session: '24x7', volumetype: 'base',
+            ...info,
         }),
     };
     if (withFootprint)

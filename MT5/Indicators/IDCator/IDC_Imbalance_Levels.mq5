@@ -26,7 +26,7 @@ enum ENUM_IDC_ZERO
 
 input group "Data"
 input ENUM_IDC_TICKSRC InpTickSource   = IDC_TICKS_AUTO; // Tick source
-input int              InpRowPoints    = 0;              // Row size in points (0 = 1 tick)
+input int              InpRowPoints    = 0;              // Row size in points (0 = auto)
 input int              InpMaxBars      = 1500;           // Bars to load
 input group "Detection"
 input double           InpMinRatio     = 5.0;            // Min imbalance ratio
@@ -90,7 +90,8 @@ public:
         {
          if(zones[i].endBar >= 0 || bar <= zones[i].startBar)
             continue;
-         if(t.price < zones[i].bottom - tick * 0.25 || t.price > zones[i].top - rowSize + tick * 0.25)
+         // the zone spans its rows: from the lowest row's low up to the highest row's last tick
+         if(t.price < zones[i].bottom - tick * 0.25 || t.price > zones[i].top - tick * 0.75)
             continue;
          if(InpDiscardNext && bar == zones[i].startBar + 1)
            {
@@ -106,7 +107,7 @@ public:
            }
          Draw(i, time, rates_total);
          msg += (zones[i].support ? "support " : "resistance ") + DoubleToString(zones[i].bottom, _Digits) + "-" +
-                DoubleToString(zones[i].top - rowSize, _Digits) + " (" + ZoneText(zones[i]) + ")  ";
+                DoubleToString(zones[i].top - tick, _Digits) + " (" + ZoneText(zones[i]) + ")  ";
         }
       if(live && InpAlertTouch && StringLen(msg) > 0)
          Alert(_Symbol + " touched imbalance " + msg);
@@ -124,7 +125,7 @@ public:
       for(int i = 1; i <= n; i++)
         {
          double r = i < n ? LevelRatio(fp.buy[i], fp.sell[i - 1]) : -1;
-         if(r >= InpMinRatio)
+         if(r >= InpMinRatio * (1 - 1e-9))   // fractional (crypto) volumes: a ratio of exactly 5 may sum to 4.9999999
            {
             if(runStart < 0)
               {
@@ -140,7 +141,7 @@ public:
               {
                int runEnd = i - 1;
                double bottom = fp.RowLow(runStart), top = fp.RowLow(runEnd) + rowSize;
-               bool okSide = !InpBeyondClose || top - rowSize < close - tick * 0.5;
+               bool okSide = !InpBeyondClose || top - tick * 0.5 < close;   // the whole stack below the close
                if(runEnd - runStart + 1 >= InpMinStack && runVol >= InpMinStackVol && okSide)
                   AddZone(bar, true, bottom, top, runMax, runVol, time, rates_total);
                runStart = -1;
@@ -151,7 +152,7 @@ public:
       for(int i = 0; i < n; i++)
         {
          double r = i < n - 1 ? LevelRatio(fp.sell[i], fp.buy[i + 1]) : -1;
-         if(r >= InpMinRatio)
+         if(r >= InpMinRatio * (1 - 1e-9))   // fractional (crypto) volumes: a ratio of exactly 5 may sum to 4.9999999
            {
             if(runStart < 0)
               {
@@ -291,6 +292,12 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
   {
+   // automatic row size from the chart's bars, set at every (re)start
+   if(prev_calculated == 0 && InpRowPoints <= 0)
+     {
+      g_ind.rowSize = IdcAutoRow(high, low, rates_total, g_ind.tick);
+      g_ind.fp.rowSize = g_ind.rowSize;
+     }
    if(!g_ind.Update(rates_total, prev_calculated, time))
      {
       Comment(g_ind.Loading() ? "IDC Imbalance: loading tick history..." : "");

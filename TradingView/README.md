@@ -9,13 +9,13 @@ Empat indikator order-flow seperti di video ProfitPro, dibuat untuk TradingView.
 | `IDC_Heavy_Absorption.pine` | IDC Heavy Abs | Lingkaran hijau/merah berisi angka volume di harga terberat. Angkanya terus naik di bar yang sedang berjalan |
 | `IDC_Pressure_Toolkit.pine` | IDC Pressure | Bubble redup/terang, kotak big trade + angka, titik absorption di wick, garis absorption, dan level psikologis |
 
-Contoh tampilan pada data NQ 15 detik simulasi ada di `preview.png` dan `preview-ptk.png`.
+Contoh tampilan pada data NQ 15 detik simulasi ada di `preview.png` dan `preview-ptk.png`. Contoh untuk Bitcoin 1 menit ada di `preview-crypto.png`.
 
 ## Syarat
 
 1. **Paket TradingView Premium atau Ultimate.** `request.footprint()` hanya jalan di paket ini; di paket lain script langsung error. Chart detik (15s) juga butuh paket ini.
 2. **Data real-time CME** untuk NQ/ES (langganan data CME di TradingView). Tanpa itu datanya delay 10 menit.
-3. Simbol yang punya volume, misalnya `CME_MINI:NQ1!`, `CME_MINI:ES1!`, `COMEX:GC1!`, atau crypto.
+3. Simbol yang punya volume, misalnya `CME_MINI:NQ1!`, `CME_MINI:ES1!`, `COMEX:GC1!`, atau crypto dari bursa (lihat bagian Crypto).
 
 FundedNext Futures resmi mendukung TradingView sebagai platform trading. Jadi chart dengan indikator ini bisa dipakai langsung di akun FundedNext (Trading Panel → login akun futures). Pastikan sesuai aturan akun masing-masing.
 
@@ -32,6 +32,26 @@ FundedNext Futures resmi mendukung TradingView sebagai platform trading. Jadi ch
 - Chart **NQ1!**, timeframe **15 detik** (boleh juga 30 detik atau 1 menit).
 - Pasang **IDC HVN** (Profile timeframe 5), **IDC Imbalance**, dan **IDC Heavy Abs** bersamaan.
 - Klik kanan di skala harga, pilih **Settings → Symbol**, lalu matikan *Wick*/*Border* kalau ingin tampilan candle setipis di video (opsional).
+
+## Crypto
+
+Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di TradingView. Pakai simbol dari bursa, misalnya `BINANCE:BTCUSDT`, `BINANCE:ETHUSDT.P`, `BYBIT:SOLUSDT`, `OKX:DOGEUSDT`, atau `COINBASE:BTCUSD`.
+
+- **Ukuran baris otomatis.** Setting *Ticks per row* = 0 (default) memilih sendiri ukuran baris footprint. Di futures dan saham ukurannya 1 tick. Di crypto, tick-nya sangat kecil dibanding harganya (BTC bergerak per 0.01 di harga sekitar 100.000), jadi indikator memakai sekitar 20 baris per bar:
+
+  | Pair | Timeframe | Baris |
+  |---|---|---|
+  | BTC/USDT | 15 detik | $2 |
+  | BTC/USDT | 1 menit | $5 |
+  | ETH/USDT | 1 menit | $0.10 |
+  | SOL, XRP, DOGE, dan sejenisnya | 1 menit | 1 tick |
+
+  Nilai yang sedang dipakai terlihat di **Data Window** (*Ticks per row*). Di HVN Profile namanya *Footprint ticks per row*.
+- **Kalau barisnya kurang pas**, pojok kanan atas chart menampilkan saran, misalnya `rows look too fine for this chart - try 'Ticks per row' = 500`. Isi angka itu di setting. Ini bisa terjadi pada koin yang jarang atau koin yang harganya sudah jauh berubah.
+- TradingView tidak mengirim footprint untuk bar dengan lebih dari 2000 baris. Indikator mendeteksinya dan menampilkan *too many price rows ... set 'Ticks per row' to N*.
+- **Angka volume dalam satuan koin**, dengan desimal untuk angka kecil: `12.5x | 0.39`, lingkaran `2.24`. Filter seperti *Min volume per level* dan *Min stack volume* juga dalam satuan koin.
+- Futures crypto CME (`CME:BTC1!`, `CME:MBT1!`, `CME:ETH1!`) adalah futures, jadi barisnya 1 tick (tick-nya sudah besar, misalnya $5).
+- Kalau muncul *no footprint data* di pair yang punya volume, cek dulu paket TradingView (Premium/Ultimate). Lalu coba simbol bursa lain.
 
 ## Alert
 
@@ -60,14 +80,15 @@ TradingView menjalankan ulang script di **setiap tick**, jadi semua indikator in
 
 Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Script open-source dari LuxAlgo) memakai data order-flow buatan. Tesnya mencakup:
 - hasil per indikator (label, warna, posisi zona);
-- update tick-per-tick (zona berhenti di tick yang menyentuh, angka lingkaran naik live).
+- update tick-per-tick (zona berhenti di tick yang menyentuh, angka lingkaran naik live);
+- crypto: ukuran baris otomatis per koin dan timeframe, sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat.
 
 Jalankan:
 
 ```
 cd tools/pine-test
 npm install
-node run.mjs --verbose          # 14 skenario
+node run.mjs --verbose          # 17 skenario (termasuk 3 skenario crypto)
 node run.mjs --render           # + gambar di tools/pine-test/out/
 node preview.mjs out/preview.png
 ```

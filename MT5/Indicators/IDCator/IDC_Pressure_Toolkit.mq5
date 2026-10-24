@@ -19,7 +19,7 @@
 
 input group "Data"
 input ENUM_IDC_TICKSRC InpTickSource   = IDC_TICKS_AUTO; // Tick source
-input int              InpRowPoints    = 0;              // Row size in points (0 = 1 tick)
+input int              InpRowPoints    = 0;              // Row size in points (0 = auto)
 input int              InpMaxBars      = 1500;           // Bars to load
 input int              InpLookback     = 50;             // Lookback bars (statistics)
 input group "Pressure bubbles"
@@ -424,6 +424,12 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
   {
+   // automatic row size from the chart's bars, set at every (re)start
+   if(prev_calculated == 0 && InpRowPoints <= 0)
+     {
+      g_ind.rowSize = IdcAutoRow(high, low, rates_total, g_ind.tick);
+      g_ind.fp.rowSize = g_ind.rowSize;
+     }
    if(!g_ind.Update(rates_total, prev_calculated, time))
      {
       Comment(g_ind.Loading() ? "IDC Pressure Toolkit: loading tick history..." : "");

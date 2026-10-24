@@ -25,6 +25,7 @@ input int              InpMaxBars      = 3000;           // Bars to load
 input group "Profile"
 input ENUM_TIMEFRAMES  InpPeriod       = PERIOD_M5;      // Profile timeframe
 input int              InpRowPoints    = 0;              // Row size in points (0 = auto)
+input int              InpBasePoints   = 0;              // Footprint row in points (0 = auto)
 input int              InpTargetRows   = 60;             // Auto: rows per profile
 input group "High volume nodes"
 input double           InpThreshold    = 70;             // HVN threshold %
@@ -70,8 +71,8 @@ struct HvnZone
 class CHvnProfile : public CIdcFeed
   {
 public:
-   CIdcFootprint     bar_;        // forming bar (tick rows)
-   CIdcFootprint     per;         // current period (tick rows)
+   CIdcFootprint     bar_;        // forming bar (base rows)
+   CIdcFootprint     per;         // current period (base rows)
    datetime          perKey;      // start time of the current period (0 none)
    int               perStart;
    int               perEnd;
@@ -133,7 +134,7 @@ public:
         }
       for(int i = 0; i < bar_.Rows(); i++)
         {
-         double p = bar_.RowLow(i) + tick * 0.5;
+         double p = bar_.RowLow(i) + bar_.rowSize * 0.5;
          if(bar_.buy[i] > 0)
             per.Add(p, bar_.buy[i], 1);
          if(bar_.sell[i] > 0)
@@ -165,9 +166,13 @@ public:
    //--- profile rows, smoothing, clusters (largest first) -> zones
    void              Analyze(const datetime &time[], const int rates_total)
      {
-      int ticks = per.Rows();
-      int rt = InpRowPoints > 0 ? (int)MathMax(1, MathRound(InpRowPoints * _Point / tick)) : (int)MathMax(1, MathCeil(ticks / (double)MathMax(5, InpTargetRows)));
-      int n = (ticks + rt - 1) / rt;
+      int rows = per.Rows();
+      // profile row: a size in ticks rounded up to whole base rows (as in the TradingView version), rt = base rows per row
+      int baseTicks = (int)MathMax(1, MathRound(per.rowSize / tick));
+      int rawTicks = InpRowPoints > 0 ? (int)MathMax(1, MathRound(InpRowPoints * _Point / tick)) :
+                     (int)MathMax(1, MathCeil(((rows - 1) * baseTicks + 1) / (double)MathMax(5, InpTargetRows)));
+      int rt = (int)MathCeil(rawTicks / (double)baseTicks);
+      int n = (rows + rt - 1) / rt;
       double vol[], buy[], sell[], sm[], nxt[];
       ArrayResize(vol, n);
       ArrayResize(buy, n);
@@ -175,7 +180,7 @@ public:
       ArrayInitialize(vol, 0);
       ArrayInitialize(buy, 0);
       ArrayInitialize(sell, 0);
-      for(int k = 0; k < ticks; k++)
+      for(int k = 0; k < rows; k++)
         {
          int r = k / rt;
          vol[r] += per.buy[k] + per.sell[k];
@@ -285,7 +290,7 @@ public:
             b += buy[r];
             s += sell[r];
            }
-         for(int k = cFirst[best] * rt; k < MathMin(ticks, (cLast[best] + 1) * rt); k++)
+         for(int k = cFirst[best] * rt; k < MathMin(rows, (cLast[best] + 1) * rt); k++)
             if(per.buy[k] + per.sell[k] > pocVol)
               {
                pocVol = per.buy[k] + per.sell[k];
@@ -299,7 +304,7 @@ public:
          zones[z].endBar = -1;
          zones[z].primary = rank == 0;
          zones[z].bottom = per.RowLow(cFirst[best] * rt);
-         zones[z].top = per.RowLow(MathMin(ticks - 1, (cLast[best] + 1) * rt - 1)) + tick;
+         zones[z].top = per.RowLow(MathMin(rows - 1, (cLast[best] + 1) * rt - 1)) + per.rowSize;
          zones[z].poc = per.RowLow(pocTick);
          zones[z].label = InpLabelPoc ? pocVol : cVol[best];
          zones[z].buyShare = b + s > 0 ? b / (b + s) : 0.5;
@@ -354,7 +359,7 @@ public:
          IdcText(PFX + "p" + id, t2, mid, pctText, buyers ? InpBuyPct : InpSellPct, InpLabelSize, "Courier New Bold", ANCHOR_RIGHT, false);
         }
       if(InpShowPoc && zones[i].primary)
-         IdcLine(PFX + "l" + id, t1, zones[i].poc + tick * 0.5, t2, zones[i].poc + tick * 0.5, InpPocColor, 2, STYLE_SOLID, false);
+         IdcLine(PFX + "l" + id, t1, zones[i].poc + per.rowSize * 0.5, t2, zones[i].poc + per.rowSize * 0.5, InpPocColor, 2, STYLE_SOLID, false);
      }
   };
 
@@ -368,8 +373,10 @@ int OnInit()
    g_ind.tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    if(g_ind.tick <= 0)
       g_ind.tick = _Point;
-   g_ind.bar_.rowSize = g_ind.tick;
-   g_ind.per.rowSize = g_ind.tick;
+   // base rows: the input, or one tick until OnCalculate sizes them from the bars
+   double base = InpBasePoints > 0 ? MathMax(1, MathRound(InpBasePoints * _Point / g_ind.tick)) * g_ind.tick : g_ind.tick;
+   g_ind.bar_.rowSize = base;
+   g_ind.per.rowSize = base;
    g_ind.nextId = 0;
    g_ind.perKey = 0;
    EventSetTimer(1);
@@ -399,6 +406,12 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
   {
+   // automatic base row from the chart's bars, set at every (re)start
+   if(prev_calculated == 0 && InpBasePoints <= 0)
+     {
+      g_ind.bar_.rowSize = IdcAutoRow(high, low, rates_total, g_ind.tick);
+      g_ind.per.rowSize = g_ind.bar_.rowSize;
+     }
    if(!g_ind.Update(rates_total, prev_calculated, time))
      {
       Comment(g_ind.Loading() ? "IDC HVN Profile: loading tick history..." : "");

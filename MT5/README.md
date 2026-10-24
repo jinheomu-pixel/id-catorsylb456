@@ -10,7 +10,7 @@ Empat indikator order-flow seperti di video ProfitPro, dibuat untuk MetaTrader 5
 | `Indicators/IDCator/IDC_Pressure_Toolkit.mq5` | IDC Pressure | Bubble redup/terang, kotak big trade + angka, titik absorption di wick, garis absorption, dan level psikologis |
 | `Include/IDCator/IDCatorCore.mqh` | - | Bagian bersama: pembaca tick, footprint, statistik, gambar objek. **Wajib ikut disalin** |
 
-Contoh tampilan (data NQ M1 simulasi, dijalankan tick per tick di terminal MT5 simulasi) ada di `preview.png` dan `preview-ptk.png`.
+Contoh tampilan (data simulasi, dijalankan tick per tick di terminal MT5 simulasi): NQ M1 di `preview.png` dan `preview-ptk.png`, Bitcoin M1 di `preview-crypto.png`.
 
 ## Penting: data dan akun
 
@@ -35,7 +35,16 @@ Kalau compile menunjukkan error, kirim screenshot tab *Errors* di MetaEditor.
 - MT5 tidak punya chart detik. Pakai **M1** (paling dekat dengan 15 detik di video).
 - Pasang **IDC HVN** (Profile timeframe M5), **IDC Imbalance**, dan **IDC Heavy Abs** bersamaan.
 - Saat pertama dipasang, pojok kiri atas menampilkan *loading tick history...*. MT5 sedang mengunduh tick, jadi tunggu sebentar. *Bars to load* mengatur berapa bar ke belakang yang dihitung (lebih banyak = lebih lama).
-- Kalau baris terlalu rapat di CFD, naikkan *Row size in points* (misalnya 5–10 pada NAS100).
+- *Row size in points* = 0 (default): ukuran baris dipilih otomatis dari bar chart, sekitar 20 baris per bar biasa. Hasilnya 1 tick di NQ M1, beberapa dolar di Bitcoin, dan pas juga untuk CFD seperti NAS100. Isi angka sendiri kalau ingin ukuran tertentu.
+
+## Crypto
+
+Keempat indikator bisa dipakai di semua simbol crypto di MT5 (BTCUSD, ETHUSD, SOLUSD, dan koin lain).
+
+- **Ukuran baris otomatis** (*Row size in points* = 0; di HVN juga *Footprint row in points* = 0). Ukurannya dihitung dari median rentang 200 bar terakhir, sekitar 20 baris per bar, dibulatkan ke 1/2/2.5/5 dan kelipatan tick. Pada data uji Bitcoin M1 hasilnya baris $5, sama dengan versi TradingView. Di chart asli keduanya biasanya mirip, tetapi tidak selalu sama persis, karena TradingView harus menaksir ukuran baris sebelum ada data.
+- **Angka volume dengan desimal** untuk angka kecil (`12.5x | 0.39`, lingkaran `2.24`).
+- **Di broker CFD** (paling umum untuk crypto di MT5), angka volume adalah hitungan perubahan harga, bukan jumlah koin (lihat bagian *Penting* di atas). Zona dan bentuknya tetap berfungsi.
+- Crypto buka 24 jam. Timer tetap menutup bar saat pasar sepi.
 
 ## Alert
 
@@ -66,7 +75,7 @@ Bisa juga dicoba di Strategy Tester (mode *Visual*, model *Every tick based on r
 
 MetaEditor tidak tersedia di lingkungan pembuatan, jadi file ini **belum di-compile dengan MetaEditor asli**. Sebagai gantinya, `tools/mql-check` menerjemahkan setiap indikator ke C++ dan menjalankannya di **terminal MT5 simulasi**. Terminal ini meniru tick history (`CopyTicksRange`), bar M1, `OnCalculate` di setiap tick, `OnTimer` tiap detik, dan objek chart. Index array di luar batas dan pembagian dengan nol menghentikan program, sama seperti critical error di MT5.
 
-Data uji: order flow NQ simulasi (3 jam, sekitar 89 ribu tick bursa), dan versi CFD-nya (hanya perubahan bid/ask). Ada 8 skenario:
+Data uji: order flow NQ simulasi (3 jam, sekitar 89 ribu tick bursa), versi CFD-nya (hanya perubahan bid/ask), dan order flow yang sama sebagai Bitcoin (harga 100.000, tick 0.01, volume pecahan). Ada 10 skenario:
 
 1. Lolos compile check (nama, jumlah parameter, tipe).
 2. **Realtime = history:** 27 ribu tick terakhir masuk satu per satu, hasil akhirnya sama persis dengan saat semua tick sudah jadi history.
@@ -76,11 +85,13 @@ Data uji: order flow NQ simulasi (3 jam, sekitar 89 ribu tick bursa), dan versi 
 6. Alert sentuhan zona keluar sekali, tepat di detik transaksi pertama yang masuk zona.
 7. Angka di lingkaran Heavy Absorption muncul saat bar masih berjalan dan terus naik (misalnya 265 → 271 → ... → 298).
 8. Pasar sepi: bar terakhir ditutup timer 30 detik setelah waktunya habis, lalu zona HVN periode itu muncul.
+9. **Bitcoin** (feed bursa dan CFD) dengan ukuran baris otomatis: baris $5, label berdesimal, realtime = history.
+10. **Bitcoin sama dengan versi TradingView** pada baris $5: semua zona, label, lingkaran, dan garis identik.
 
 ```
 cd tools/pine-test && npm install && cd ../..      # sekali (dipakai bersama tes TradingView)
 python3 tools/mql-check/check.py                   # compile check
-node tools/mql-check/run.mjs --verbose             # 8 skenario
+node tools/mql-check/run.mjs --verbose             # 10 skenario
 node tools/mql-check/run.mjs --render              # + gambar di tools/mql-check/out/
 ```
 

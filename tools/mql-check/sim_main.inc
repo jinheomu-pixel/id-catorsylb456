@@ -1,11 +1,12 @@
 // IDCator MT5 simulation driver, appended by `check.py --run` to a translated indicator.
 //
-//   sim TICKS.csv OUT.json [--hist N] [--batch N] [--quiet SECONDS] [--snap I,J,...] [--set Name=Value ...]
+//   sim TICKS.csv OUT.json [--hist N] [--batch N] [--quiet SECONDS] [--snap I,J,...] [--tick SIZE] [--set Name=Value ...]
 //
 // TICKS.csv: time_msc,bid,ask,last,volume,flags (MqlTick fields), oldest first.
 // The first N ticks (--hist) are history when the indicator is attached; every later tick arrives live and
 // OnCalculate runs after every --batch ticks. OnTimer fires every second of the simulated clock, also during
 // --quiet seconds after the last tick. --snap writes the chart objects after the given tick numbers.
+// --tick: the symbol's tick size and point (default 0.25, NQ).
 #include <csignal>
 #include <fstream>
 #include <sstream>
@@ -128,7 +129,7 @@ int main(int argc, char **argv)
   {
    if(argc < 3)
      {
-      std::fprintf(stderr, "usage: %s TICKS.csv OUT.json [--hist N] [--batch N] [--quiet S] [--snap I,J] [--set Name=Value]\n", argv[0]);
+      std::fprintf(stderr, "usage: %s TICKS.csv OUT.json [--hist N] [--batch N] [--quiet S] [--snap I,J] [--tick SIZE] [--set Name=Value]\n", argv[0]);
       return 2;
      }
    long hist = -1, batch = 1, quiet = 0;
@@ -155,6 +156,12 @@ int main(int argc, char **argv)
                   i++;
                  }
                else
+                  if(a == "--tick")
+                    {
+                     Sim::tickSize = Sim::point = _Point = std::stod(v);
+                     i++;
+                    }
+                  else
                   if(a == "--set")
                     {
                      size_t eq = v.find('=');
@@ -175,13 +182,13 @@ int main(int argc, char **argv)
       if(line.empty() || !(std::isdigit((unsigned char)line[0])))
          continue;
       MqlTick k{};
-      unsigned long long vol = 0;
+      double vol = 0;
       unsigned int flags = 0;
-      if(std::sscanf(line.c_str(), "%lld,%lf,%lf,%lf,%llu,%u", &k.time_msc, &k.bid, &k.ask, &k.last, &vol, &flags) != 6)
+      if(std::sscanf(line.c_str(), "%lld,%lf,%lf,%lf,%lf,%u", &k.time_msc, &k.bid, &k.ask, &k.last, &vol, &flags) != 6)
          continue;
       k.time = k.time_msc / 1000;
-      k.volume = vol;
-      k.volume_real = (double)vol;
+      k.volume = (ulong)std::llround(vol);
+      k.volume_real = vol;
       k.flags = flags;
       anyLast = anyLast || (flags & TICK_FLAG_LAST) != 0;
       Sim::ticks.push_back(k);

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { simMarket, tradeTicks, quoteTicks, writeTicks } from './ticks.mjs';
+import { simMarket, btcMarket, tradeTicks, quoteTicks, writeTicks } from './ticks.mjs';
 import { compareAll } from './compare.mjs';
 import { renderMt5 } from './render.mjs';
 import { renderPng, closeBrowser } from '../pine-test/harness.mjs';
@@ -30,6 +30,10 @@ const TRADES = path.join(OUT, 'nq-trades.csv'), QUOTES = path.join(OUT, 'nq-quot
 const trades = tradeTicks(market), quotes = quoteTicks(market);
 writeTicks(TRADES, trades);
 writeTicks(QUOTES, quotes);
+const btc = btcMarket();
+const BTC_TRADES = path.join(OUT, 'btc-trades.csv'), BTC_QUOTES = path.join(OUT, 'btc-quotes.csv');
+writeTicks(BTC_TRADES, tradeTicks(btc));
+writeTicks(BTC_QUOTES, quoteTicks(btc));
 const t0 = market.candles[0].openTime / 1000;
 const bar = (t) => Math.floor((t - t0) / 60);
 const LIVE_FROM = 62000;                             // ticks before this are history when the indicator is attached
@@ -43,11 +47,14 @@ function sim(ind, ticks, tag, opts = []) {
     if (r.status !== 0) throw new Error(`${ind} ${tag}: exit ${r.status}\n${r.stderr}${r.stdout}`);
     return JSON.parse(fs.readFileSync(out, 'utf8'));
 }
-const objMap = (d) => new Map(d.objects.map((o) => [o.name, JSON.stringify(o)]));
+// the same drawings: compared by content, without the running number in the object name (two objects created in the
+// same bar can get their numbers in another order live than from history)
+const objKey = (o) => JSON.stringify({ ...o, name: o.name.replace(/\d+/g, '#') });
 function sameObjects(c, what, a, b) {
-    const A = objMap(a), B = objMap(b);
+    const count = (d) => d.objects.reduce((m, o) => m.set(objKey(o), (m.get(objKey(o)) ?? 0) + 1), new Map());
+    const A = count(a), B = count(b);
     const bad = [...new Set([...A.keys(), ...B.keys()])].filter((k) => A.get(k) !== B.get(k));
-    c.check(bad.length === 0, `${what}: ${bad.length} of ${A.size} objects differ (${bad.slice(0, 3).join(', ')})`);
+    c.check(bad.length === 0, `${what}: ${bad.length} drawings differ (${bad.slice(0, 2).join(' | ')})`);
     return bad.length === 0;
 }
 
@@ -149,6 +156,44 @@ scenario('MT5-08 quiet market closes the bar by timer', 'no next trade: the last
     const late = sim('IDC_HVN_Profile', TRADES, 'quiet120', ['--quiet', 120]);
     c.eq(0, zonesFrom(early), '20 s after the last trade (bar not over + 30 s yet): zones of the last period');
     c.check(zonesFrom(late) >= 1, `120 s after: zones of the last period appear (${zonesFrom(late)})`);
+});
+
+// ───────────────── Bitcoin (100,000, tick 0.01, fractional sizes): the symbol's tick goes to the simulated terminal
+const BTC_INFO = { type: 'crypto', basecurrency: 'BTC', currency: 'USDT', mintick: 0.01, ticker: 'BTCUSDT', tickerid: 'BINANCE:BTCUSDT', prefix: 'BINANCE', session: '24x7' };
+
+scenario('MT5-09 Bitcoin with the automatic row size', 'BTC exchange feed and BTC CFD quotes: rows sized from the bars (a few dollars), labels keep decimals, realtime = history', async (c) => {
+    const btcLive = Math.floor(tradeTicks(btc).length * 0.7);
+    for (const ind of IND) {
+        const h = sim(ind, BTC_TRADES, 'btc-hist', ['--tick', 0.01, '--quiet', 120]);
+        c.check(h.objects.length > 0, `${ind} draws on BTC`);
+        sameObjects(c, `${ind} BTC`, h, sim(ind, BTC_TRADES, 'btc-live', ['--tick', 0.01, '--hist', btcLive, '--quiet', 120]));
+        const q = sim(ind, BTC_QUOTES, 'btc-cfd', ['--tick', 0.01, '--quiet', 120]);
+        c.check(q.objects.length > 0, `${ind} draws on BTC CFD quotes`);
+    }
+    // row size: imbalance zones are whole rows; the smallest (3-row) stack gives the row
+    const z = results['btc-imb'] = sim('IDC_Imbalance_Levels', BTC_TRADES, 'btc-hist', ['--tick', 0.01, '--quiet', 120]);
+    const heights = z.objects.filter((o) => o.name.startsWith('IDCimb_z')).map((o) => +(o.p1 - o.p2).toFixed(2));
+    const row = Math.min(...heights) / 3;
+    c.check(row >= 1 && row <= 10, `row size $${row} (about 20 rows per median bar)`);
+    c.check(heights.every((h) => Math.abs(h / row - Math.round(h / row)) < 1e-6), 'every zone is a whole number of rows');
+    const labels = z.objects.filter((o) => o.name.startsWith('IDCimb_t')).map((o) => o.text);
+    c.check(labels.some((t) => /\| \d+\.\d+$/.test(t)), `labels keep decimals: ${labels.slice(0, 4).join(', ')}`);
+    c.note(`row $${row}; zones ${labels.slice(0, 3).join(', ')}`);
+});
+
+scenario('MT5-10 Bitcoin: same as TradingView', 'both forced to $5 rows (500 ticks) on the same BTC trades: identical zones, labels, markers and lines', async (c) => {
+    const dir = path.join(OUT, 'compare-btc');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const ind of IND) {
+        const rows = ['--set', 'InpRowPoints=500', ...(ind === 'IDC_HVN_Profile' ? ['--set', 'InpBasePoints=500'] : [])];
+        fs.writeFileSync(path.join(dir, ind + '.json'), JSON.stringify(sim(ind, BTC_TRADES, 'btc-500', ['--tick', 0.01, '--quiet', 120, ...rows])));
+    }
+    const t500 = { 'Ticks per row (0 = auto)': 500 };
+    const inputs = { 'IDC_Imbalance_Levels.pine': t500, 'IDC_Heavy_Absorption.pine': t500, 'IDC_Pressure_Toolkit.pine': t500, 'IDC_HVN_Profile.pine': { 'Row size (ticks, 0 = auto)': 500 } };
+    const lines = [];
+    const failed = await compareAll(dir, (s) => lines.push(s), { market: btc, info: BTC_INFO, inputs });
+    c.eq(0, failed, 'indicators that differ');
+    for (const l of lines) (l.startsWith('SAME') ? c.note(l) : c.fails.push(l));
 });
 
 let failed = 0;

@@ -11,7 +11,8 @@ indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, max_labels_cou
 
 // ───────────────────────────────────────────── inputs
 G_GEN = "General"
-int    rowTicksInput  = input.int(1, "Ticks per row", minval = 1, group = G_GEN)
+int    rowTicksInput  = input.int(0, "Ticks per row (0 = auto)", minval = 0, group = G_GEN,
+     tooltip = "0 = auto: 1 tick on futures and stocks; on crypto about 20 rows across a typical bar of this timeframe. The Data Window shows the value in use.")
 int    lookbackInput  = input.int(50, "Lookback bars (statistics)", minval = 5, maxval = 2000, group = G_GEN)
 
 G_BUB = "Pressure bubbles"
@@ -64,7 +65,89 @@ bool   alertLineInput = input.bool(false, "Absorption line retest", group = G_AL
 bool   alertPsychInput = input.bool(false, "Psychological level cross", group = G_ALR)
 
 // ───────────────────────────────────────────── data and state
-footprint fp = request.footprint(rowTicksInput)
+// ───────────────────────────────────────────── footprint row size
+//@function Rough dollar price of a coin, known when the script loads (na when it is not listed).
+// Only the order of magnitude matters: a price off by 2x moves the row size by one step.
+coinPrice(string coin) =>
+    switch coin
+        "BTC"    => 100000.0
+        "WBTC"   => 100000.0
+        "ETH"    => 3500.0
+        "WETH"   => 3500.0
+        "BNB"    => 700.0
+        "SOL"    => 180.0
+        "XRP"    => 2.5
+        "DOGE"   => 0.25
+        "ADA"    => 0.8
+        "TRX"    => 0.3
+        "AVAX"   => 30.0
+        "LINK"   => 20.0
+        "DOT"    => 6.0
+        "TON"    => 4.0
+        "SHIB"   => 0.000015
+        "PEPE"   => 0.00001
+        "BONK"   => 0.00002
+        "FLOKI"  => 0.0001
+        "LTC"    => 100.0
+        "BCH"    => 450.0
+        "XLM"    => 0.35
+        "SUI"    => 3.5
+        "NEAR"   => 4.0
+        "APT"    => 8.0
+        "UNI"    => 10.0
+        "ATOM"   => 6.0
+        "ETC"    => 22.0
+        "FIL"    => 4.0
+        "ARB"    => 0.6
+        "OP"     => 1.5
+        "INJ"    => 20.0
+        "HBAR"   => 0.25
+        "ICP"    => 8.0
+        "AAVE"   => 250.0
+        "MKR"    => 1500.0
+        "WIF"    => 1.5
+        "SEI"    => 0.4
+        "TIA"    => 4.0
+        "RENDER" => 6.0
+        "FET"    => 1.2
+        "IMX"    => 1.2
+        "STX"    => 1.5
+        "LDO"    => 1.5
+        "CRV"    => 0.6
+        "HYPE"   => 30.0
+        "ENA"    => 0.6
+        "JUP"    => 0.8
+        "TAO"    => 400.0
+        "XMR"    => 300.0
+        "ZEC"    => 50.0
+        "ONDO"   => 1.0
+        "WLD"    => 1.5
+        "TRUMP"  => 10.0
+        "PENGU"  => 0.02
+        "KAS"    => 0.1
+        "ALGO"   => 0.3
+        "VET"    => 0.04
+        => na
+
+//@function A round price step near `px`: 1, 2, 2.5 or 5 times a power of ten.
+niceRow(float px) =>
+    float mag = math.pow(10, math.floor(math.log10(px)))
+    float f   = px / mag
+    (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag
+
+//@function Footprint ticks per row: `manual` when above 0, else automatic. Futures and stocks: 1 tick. Crypto (its tick
+// is tiny next to its price): about 20 rows across a typical bar of the chart's timeframe (3 % daily range).
+autoTicks(int manual) =>
+    float mt     = syminfo.mintick
+    bool  dollar = str.contains(",USD,USDT,USDC,FDUSD,BUSD,USDE,DAI,TUSD,PYUSD,USD1,EUR,GBP,", "," + syminfo.currency + ",")
+    // a coin not listed, or not quoted in dollars: most coins are quoted with about 5 significant digits
+    float price  = syminfo.type == "crypto" ? nz(dollar ? coinPrice(syminfo.basecurrency) : na, mt * 30000) : na
+    float rowPx  = niceRow(price * 0.03 * math.sqrt(timeframe.in_seconds() / 86400) / 20)
+    manual > 0 ? manual : na(price) ? 1 : math.max(1, int(math.round(rowPx / mt)))
+
+int rowTicks = autoTicks(rowTicksInput)
+footprint fp = request.footprint(rowTicks)
+plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
 
 type ALine
@@ -89,12 +172,15 @@ var float lTotN = 0.0
 var float lTotS = 0.0
 var float lTotQ = 0.0
 
+//@function Volume label: 165, 1.2k, 3.4M; crypto volumes keep decimals (18.5, 2.35, 0.042).
 volText(float v) =>
     float a = math.abs(v)
-    a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
+    a >= 1e9 ? str.tostring(v / 1e9, "#.#") + "B" :
+     a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
      a >= 1e4 ? str.tostring(v / 1e3, "#") + "k" :
      a >= 1e3 ? str.tostring(v / 1e3, "#.#") + "k" :
-     str.tostring(math.round(v))
+     a >= 100 ? str.tostring(math.round(v)) :
+     a >= 10 ? str.tostring(v, "#.#") : a >= 1 ? str.tostring(v, "#.##") : str.tostring(v, "#.###")
 
 rowPrice(volume_row r) =>
     r.down_price() + (r.up_price() - r.down_price() - tick) / 2
@@ -314,8 +400,20 @@ if wantAlert
 var bool anyFp = false
 if not na(fp)
     anyFp := true
+
+// typical bar range of this chart, for the row size hint
+float typRange = ta.sma(high - low, 100)
+
+//@function Status text when the row size does not suit the chart, "" when it does. `fine`: also hint when the rows are
+// much finer or coarser than about 20 per typical bar.
+rowHint(string name, int used, bool fine) =>
+    int sug = math.max(1, int(math.round(niceRow(typRange / 20) / syminfo.mintick)))
+    not anyFp and typRange / (used * syminfo.mintick) > 1000 ? name + ": too many price rows per bar for the footprint - set 'Ticks per row' to " + str.tostring(sug) :
+         anyFp and fine and (used >= sug * 4 or sug >= used * 4) ? name + ": rows look too " + (used > sug ? "coarse" : "fine") + " for this chart - try 'Ticks per row' = " + str.tostring(sug) + " (now " + str.tostring(used) + ")" : ""
+
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
-    string m = not anyFp ? "IDC Pressure Toolkit: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" :
-         not ready ? "IDC Pressure Toolkit: collecting statistics" : ""
+    string hint = rowHint("IDC Pressure Toolkit", rowTicks, true)
+    string m = not anyFp ? (str.length(hint) > 0 ? hint : "IDC Pressure Toolkit: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)") :
+         not ready ? "IDC Pressure Toolkit: collecting statistics" : hint
     table.cell(info, 0, 0, m, text_color = color.orange, text_size = 9)

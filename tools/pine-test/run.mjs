@@ -7,7 +7,7 @@
 // Exit code = number of failed scenarios.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runPine, drawings, makeMarket, renderSvg, renderPng, closeBrowser } from './harness.mjs';
+import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser } from './harness.mjs';
 import { Tape, Live, barStart } from './tape.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -343,6 +343,68 @@ scenario('SIM-01 all four on a simulated NQ session', 'every script runs on 300 
 });
 
 // ═════════════════════════════════════════════ runner
+// ═════════════════════════════════════════════ Crypto
+const BTC = { type: 'crypto', basecurrency: 'BTC', currency: 'USDT', mintick: 0.01, ticker: 'BTCUSDT', tickerid: 'BINANCE:BTCUSDT', prefix: 'BINANCE', description: 'Bitcoin / TetherUS', session: '24x7' };
+/** Simulated Bitcoin order flow: the preview's NQ session at 100,000 with $5 moves and fractional BTC sizes. */
+function btcMarket(barSec = 60) {
+    const segs = [];
+    for (const drift of [0.5, 0.62, 0.5, 0.4, 0.5, 0.58]) {
+        segs.push({ bars: 12, tradesPerBar: 170, bigProb: 0.005, revert: drift === 0.5 ? { level: 25000, strength: 0.05 } : null, buyProb: drift, liftProb: 0.26 });
+        segs.push({ bars: 12, tradesPerBar: 170, bigProb: 0.005, buyProb: drift, liftProb: 0.24 });
+    }
+    return scaleMarket(makeMarket({ seed: 7, barSec, segments: segs }));
+}
+const ticksUsed = (ctx, title = 'Ticks per row') => ctx.plots?.[title]?.data?.at(-1)?.value;
+const status = (ctx) => drawings(ctx).tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.text ?? '').join(' ').trim();
+
+scenario('CRY-01 auto row size per coin and timeframe', 'crypto: about 20 rows per typical bar (BTC 1m $5, 15s $2, ETH 1m $0.10); 1 tick on futures; manual value wins', async (c) => {
+    const nq15 = makeMarket({ seed: 5, segments: [{ bars: 30 }] });
+    const nq60 = makeMarket({ seed: 5, barSec: 60, segments: [{ bars: 30 }] });
+    const cases = [
+        ['BTC/USDT 1m', nq60, BTC, {}, 500],
+        ['BTC/USDT 15s', nq15, BTC, {}, 200],
+        ['ETH/USDT 1m', nq60, { ...BTC, basecurrency: 'ETH' }, {}, 10],
+        ['DOGE/USDT 1m', nq60, { ...BTC, basecurrency: 'DOGE', mintick: 0.00001 }, {}, 1],
+        ['unlisted coin 1m', nq60, { ...BTC, basecurrency: 'ABCD', mintick: 0.0001 }, {}, 1],
+        ['ETH/BTC 1m (not in dollars)', nq60, { ...BTC, basecurrency: 'ETH', currency: 'BTC', mintick: 0.00001 }, {}, 1],
+        ['NQ futures 15s', nq15, {}, {}, 1],
+        ['BTC/USDT 1m, manual 7', nq60, BTC, { 'Ticks per row (0 = auto)': 7 }, 7],
+    ];
+    for (const [name, m, info, inputs, want] of cases) {
+        const ctx = await runPine(IMB, m, inputs, { info });
+        c.eq(want, ticksUsed(ctx), `${name}: ticks per row`);
+    }
+    const hvn = await runPine(HVN, nq60, {}, { info: BTC });
+    c.eq(500, ticksUsed(hvn, 'Footprint ticks per row'), 'HVN BTC/USDT 1m: footprint ticks per row');
+});
+
+scenario('CRY-02 Bitcoin session', 'all four on simulated BTC/USDT 1m: footprint available, zones and circles drawn, labels keep decimals (e.g. "7.5x | 2.35")', async (c) => {
+    const m = btcMarket();
+    const res = {};
+    for (const [name, file] of [['Imbalance', IMB], ['HVN', HVN], ['Heavy Absorption', HA], ['Pressure', PTK]]) {
+        const ctx = await runPine(file, m, {}, { info: BTC });
+        res[name] = ctx;
+        const st = status(ctx);
+        c.check(!/no footprint|too many|look too/.test(st), `${name}: status "${st}"`);
+    }
+    const zones = drawings(res.Imbalance).boxes.map((b) => String(b.text));
+    c.check(zones.length >= 5, `imbalance zones: ${zones.length}`);
+    c.check(zones.some((t) => /\| \d+\.\d+$/.test(t)), `imbalance labels with decimals: ${zones.slice(0, 4).join(', ')}`);
+    c.check(drawings(res.HVN).boxes.length >= 5, `HVN zones: ${drawings(res.HVN).boxes.length}`);
+    const marks = drawings(res['Heavy Absorption']).labels.filter((l) => l.text && !['●', '○'].includes(l.text)).map((l) => l.text);
+    c.check(marks.length >= 1 && marks.every((t) => /^\d+(\.\d+)?$/.test(t)), `circle numbers: ${marks.slice(0, 5).join(', ')}`);
+    c.check(drawings(res.Pressure).labels.length >= 5, `pressure markers: ${drawings(res.Pressure).labels.length}`);
+    c.note(`zones ${zones.slice(0, 3).join(', ')}; circles ${marks.slice(0, 3).join(', ')}`);
+});
+
+scenario('CRY-03 rows far too fine: the chart says what to set', "BTC with 'Ticks per row' = 1: most bars exceed TradingView's 2000-row footprint, the status suggests a value", async (c) => {
+    const ctx = await runPine(IMB, btcMarket(), { 'Ticks per row (0 = auto)': 1 }, { info: BTC });
+    const st = status(ctx);
+    const sug = Number((st.match(/(?:set 'Ticks per row' to|'Ticks per row' = )\s*(\d+)/) ?? [])[1]);
+    c.check(sug >= 50 && sug <= 2000, `status suggests a value between 50 and 2000: "${st}"`);
+});
+
+
 const selected = filters.length ? scenarios.filter((s) => filters.some((f) => s.name.toLowerCase().includes(f.toLowerCase()))) : scenarios;
 console.log(`IDCator TradingView scripts (PineTS) - ${selected.length} scenario(s)`);
 console.log('='.repeat(100));

@@ -99,6 +99,7 @@ template <class T> int ArrayMaximum(const MqlArr<T> &a, int start = 0, int count
   }
 template <class T, class V> int ArrayInitialize(MqlArr<T> &a, V value) { for(auto &x : a.v) x = (T)value; return (int)a.v.size(); }
 template <class T> bool ArraySetAsSeries(MqlArr<T> &a, bool flag) { return !flag; }
+template <class T> bool ArraySort(MqlArr<T> &a) { std::sort(a.v.begin(), a.v.end()); return true; }
 
 // ---------------------------------------------------------------- enums and constants
 enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M2 = 2, PERIOD_M3 = 3, PERIOD_M4 = 4, PERIOD_M5 = 5, PERIOD_M6 = 6,

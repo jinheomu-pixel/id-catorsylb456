@@ -498,6 +498,8 @@ string IdcVolText(const double v, const bool upperK)
   {
    double a = MathAbs(v);
    string k = upperK ? "K" : "k";
+   if(a >= 1000000000)
+      return IdcNum(v / 1000000000.0, 1) + "B";
    if(a >= 10000000)
       return IdcNum(v / 1000000.0, 0) + "M";
    if(a >= 1000000)
@@ -506,7 +508,14 @@ string IdcVolText(const double v, const bool upperK)
       return IdcNum(v / 1000.0, 0) + k;
    if(a >= 1000)
       return IdcNum(v / 1000.0, 1) + k;
-   return IdcNum(v, 0);
+   if(a >= 100)
+      return IdcNum(v, 0);
+   // crypto volumes are fractional: 18.5, 2.35, 0.042
+   if(a >= 10)
+      return IdcNum(v, 1);
+   if(a >= 1)
+      return IdcNum(v, 2);
+   return IdcNum(v, 3);
   }
 
 string IdcRatioText(const double r)
@@ -610,7 +619,32 @@ string IdcGlyph(const int code)
    return CharToString((uchar)code);
   }
 
-//--- price row size: input in points, 0 = one tick
+//--- a round price step near px: 1, 2, 2.5 or 5 times a power of ten
+double IdcNiceStep(const double px)
+  {
+   if(px <= 0)
+      return 0;
+   double mag = MathPow(10, MathFloor(MathLog10(px)));
+   double f = px / mag;
+   return (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag;
+  }
+
+//--- automatic row size: about 20 rows across the median closed bar of the chart, a whole number of ticks
+//--- (1 tick on NQ M1, a few dollars on Bitcoin, works the same on CFDs, forex and any coin)
+double IdcAutoRow(const double &high[], const double &low[], const int rates_total, const double tick)
+  {
+   int n = MathMin(200, rates_total - 1);
+   if(n < 5 || tick <= 0)
+      return tick;
+   double r[];
+   ArrayResize(r, n);
+   for(int i = 0; i < n; i++)
+      r[i] = high[rates_total - 2 - i] - low[rates_total - 2 - i];
+   ArraySort(r);
+   return MathMax(1, MathRound(IdcNiceStep(r[n / 2] / 20) / tick)) * tick;
+  }
+
+//--- price row size: input in points, 0 = one tick (the indicators replace it with IdcAutoRow once bars are there)
 double IdcRowSize(const string symbol, const int rowPoints)
   {
    double tick = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);

@@ -27,7 +27,7 @@ enum ENUM_IDC_HA_UNIT
 
 input group "Data"
 input ENUM_IDC_TICKSRC InpTickSource   = IDC_TICKS_AUTO; // Tick source
-input int              InpRowPoints    = 0;              // Row size in points (0 = 1 tick)
+input int              InpRowPoints    = 0;              // Row size in points (0 = auto)
 input int              InpMaxBars      = 1500;           // Bars to load
 input group "Detection"
 input ENUM_IDC_HA_UNIT InpUnit         = IDC_HA_PRICE;   // What counts as heavy
@@ -313,6 +313,12 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
   {
+   // automatic row size from the chart's bars, set at every (re)start
+   if(prev_calculated == 0 && InpRowPoints <= 0)
+     {
+      g_ind.rowSize = IdcAutoRow(high, low, rates_total, g_ind.tick);
+      g_ind.fp.rowSize = g_ind.rowSize;
+     }
    if(!g_ind.Update(rates_total, prev_calculated, time))
      {
       Comment(g_ind.Loading() ? "IDC Heavy Absorption: loading tick history..." : "");

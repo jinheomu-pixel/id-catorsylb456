@@ -14,9 +14,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const TV = path.join(here, '..', '..', 'TradingView');
 const f2 = (v) => Number(v).toFixed(2);
 
-const market = simMarket();
-const t0 = market.candles[0].openTime / 1000;
-const bar = (t) => Math.floor((t - t0) / 60);
 // right edge in MT5 terms: a touched object covers its touch bar, an active one reaches one bar past the last
 // (TradingView ends a touched object at the touch bar and an active one at bar_index + 1)
 const tvEnd = (right, last) => (right === last + 1 ? right : right + 1);
@@ -37,12 +34,16 @@ function diff(log, title, a, b, show = 8) {
 }
 
 /** Compares DIR/<indicator>.json (MT5 simulation of DIR/nq-trades.csv) with PineTS; returns the number of indicators that differ. */
-export async function compareAll(dir, log = console.log) {
+// `market`, `info` (TradingView symbol info) and `inputs` (TradingView inputs per script) describe the run that DIR holds.
+export async function compareAll(dir, log = console.log, { market = simMarket(), info = {}, inputs = {} } = {}) {
+    const t0 = market.candles[0].openTime / 1000;
+    const bar = (t) => Math.floor((t - t0) / 60);
+    const runTv = (file) => runPine(path.join(TV, file), market, inputs[file] ?? {}, { info });
     let failed = 0;
 
     // ───────────────── Imbalance Levels: zones (start bar, bottom, top) -> label, end
     {
-        const ctx = await runPine(path.join(TV, 'IDC_Imbalance_Levels.pine'), market);
+        const ctx = await runTv('IDC_Imbalance_Levels.pine');
         const m = mt5(dir, 'IDC_Imbalance_Levels');
         const tv = new Map(), mt = new Map();
         for (const b of drawings(ctx).boxes) tv.set(`${b.left}|${f2(b.bottom)}|${f2(b.top)}`, [String(b.text), tvEnd(b.right, m.last)]);
@@ -55,7 +56,7 @@ export async function compareAll(dir, log = console.log) {
 
     // ───────────────── HVN Profile: zones (start bar, bottom, top) -> label, end
     {
-        const ctx = await runPine(path.join(TV, 'IDC_HVN_Profile.pine'), market);
+        const ctx = await runTv('IDC_HVN_Profile.pine');
         const m = mt5(dir, 'IDC_HVN_Profile');
         const d = drawings(ctx);
         const tv = new Map(), mt = new Map();
@@ -74,7 +75,7 @@ export async function compareAll(dir, log = console.log) {
 
     // ───────────────── Heavy Absorption: markers (bar, price) -> number
     {
-        const ctx = await runPine(path.join(TV, 'IDC_Heavy_Absorption.pine'), market);
+        const ctx = await runTv('IDC_Heavy_Absorption.pine');
         const m = mt5(dir, 'IDC_Heavy_Absorption');
         const tv = new Map(), mt = new Map();
         for (const l of drawings(ctx).labels.filter((l) => l.text && !['●', '○'].includes(l.text))) tv.set(`${l.x}|${f2(l.y)}`, String(l.text));
@@ -84,7 +85,7 @@ export async function compareAll(dir, log = console.log) {
 
     // ───────────────── Pressure Toolkit: bubbles, big trades, dots, absorption lines, psychological levels
     {
-        const ctx = await runPine(path.join(TV, 'IDC_Pressure_Toolkit.pine'), market);
+        const ctx = await runTv('IDC_Pressure_Toolkit.pine');
         const m = mt5(dir, 'IDC_Pressure_Toolkit');
         const d = drawings(ctx);
         const tvB = new Map(), mtB = new Map(), tvQ = new Map(), mtQ = new Map(), tvD = new Map(), mtD = new Map(), tvL = new Map(), mtL = new Map();

@@ -15,8 +15,8 @@ G_PER = "Profile"
 string periodInput     = input.timeframe("5", "Profile timeframe", group = G_PER,
      tooltip = "Length of each profile: 1 minute to Weekly. Must be higher than the chart timeframe.")
 int    rowTicksInput   = input.int(0, "Row size (ticks, 0 = auto)", minval = 0, group = G_PER)
-int    fpTicksInput    = input.int(1, "Footprint ticks per row", minval = 1, group = G_PER,
-     tooltip = "Raise this on symbols with a very small tick (crypto) if the indicator shows no data.")
+int    fpTicksInput    = input.int(0, "Footprint ticks per row (0 = auto)", minval = 0, group = G_PER,
+     tooltip = "Finest price step of the profile. 0 = auto: 1 tick on futures and stocks; on crypto about 20 rows across a typical bar of this timeframe.")
 int    targetRowsInput = input.int(60, "Auto: rows per profile", minval = 5, maxval = 400, group = G_PER)
 
 G_HVN = "High volume nodes"
@@ -57,7 +57,89 @@ bool   alertTouchInput = input.bool(true, "Alert when price touches a zone", gro
      tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
 
 // ───────────────────────────────────────────── data
-footprint fp = request.footprint(fpTicksInput)
+// ───────────────────────────────────────────── footprint row size
+//@function Rough dollar price of a coin, known when the script loads (na when it is not listed).
+// Only the order of magnitude matters: a price off by 2x moves the row size by one step.
+coinPrice(string coin) =>
+    switch coin
+        "BTC"    => 100000.0
+        "WBTC"   => 100000.0
+        "ETH"    => 3500.0
+        "WETH"   => 3500.0
+        "BNB"    => 700.0
+        "SOL"    => 180.0
+        "XRP"    => 2.5
+        "DOGE"   => 0.25
+        "ADA"    => 0.8
+        "TRX"    => 0.3
+        "AVAX"   => 30.0
+        "LINK"   => 20.0
+        "DOT"    => 6.0
+        "TON"    => 4.0
+        "SHIB"   => 0.000015
+        "PEPE"   => 0.00001
+        "BONK"   => 0.00002
+        "FLOKI"  => 0.0001
+        "LTC"    => 100.0
+        "BCH"    => 450.0
+        "XLM"    => 0.35
+        "SUI"    => 3.5
+        "NEAR"   => 4.0
+        "APT"    => 8.0
+        "UNI"    => 10.0
+        "ATOM"   => 6.0
+        "ETC"    => 22.0
+        "FIL"    => 4.0
+        "ARB"    => 0.6
+        "OP"     => 1.5
+        "INJ"    => 20.0
+        "HBAR"   => 0.25
+        "ICP"    => 8.0
+        "AAVE"   => 250.0
+        "MKR"    => 1500.0
+        "WIF"    => 1.5
+        "SEI"    => 0.4
+        "TIA"    => 4.0
+        "RENDER" => 6.0
+        "FET"    => 1.2
+        "IMX"    => 1.2
+        "STX"    => 1.5
+        "LDO"    => 1.5
+        "CRV"    => 0.6
+        "HYPE"   => 30.0
+        "ENA"    => 0.6
+        "JUP"    => 0.8
+        "TAO"    => 400.0
+        "XMR"    => 300.0
+        "ZEC"    => 50.0
+        "ONDO"   => 1.0
+        "WLD"    => 1.5
+        "TRUMP"  => 10.0
+        "PENGU"  => 0.02
+        "KAS"    => 0.1
+        "ALGO"   => 0.3
+        "VET"    => 0.04
+        => na
+
+//@function A round price step near `px`: 1, 2, 2.5 or 5 times a power of ten.
+niceRow(float px) =>
+    float mag = math.pow(10, math.floor(math.log10(px)))
+    float f   = px / mag
+    (f < 1.5 ? 1.0 : f < 2.25 ? 2.0 : f < 3.5 ? 2.5 : f < 7.5 ? 5.0 : 10.0) * mag
+
+//@function Footprint ticks per row: `manual` when above 0, else automatic. Futures and stocks: 1 tick. Crypto (its tick
+// is tiny next to its price): about 20 rows across a typical bar of the chart's timeframe (3 % daily range).
+autoTicks(int manual) =>
+    float mt     = syminfo.mintick
+    bool  dollar = str.contains(",USD,USDT,USDC,FDUSD,BUSD,USDE,DAI,TUSD,PYUSD,USD1,EUR,GBP,", "," + syminfo.currency + ",")
+    // a coin not listed, or not quoted in dollars: most coins are quoted with about 5 significant digits
+    float price  = syminfo.type == "crypto" ? nz(dollar ? coinPrice(syminfo.basecurrency) : na, mt * 30000) : na
+    float rowPx  = niceRow(price * 0.03 * math.sqrt(timeframe.in_seconds() / 86400) / 20)
+    manual > 0 ? manual : na(price) ? 1 : math.max(1, int(math.round(rowPx / mt)))
+
+int fpTicks = autoTicks(fpTicksInput)
+footprint fp = request.footprint(fpTicks)
+plot(fpTicks, "Footprint ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
 
 type Period
@@ -117,7 +199,7 @@ addRows(Period p, footprint f) =>
 //@function Profile row size in ticks: a whole number of footprint rows.
 rowSize(int lowT, int highT) =>
     int raw = rowTicksInput > 0 ? rowTicksInput : math.max(1, int(math.ceil((highT - lowT + 1) / math.max(5.0, targetRowsInput))))
-    int(math.ceil(raw / fpTicksInput)) * fpTicksInput
+    int(math.ceil(raw / fpTicks)) * fpTicks
 
 //@function Row volumes of a period (with optionally one extra, unconfirmed footprint).
 rowsOf(Period p, footprint extra, int lowT, int rt, int nRows) =>
@@ -229,12 +311,15 @@ analyze(Period p) =>
             result := sorted
     [result, rowSize(p.lowTick, p.highTick)]
 
+//@function Volume label: 165, 1.2k, 3.4M; crypto volumes keep decimals (18.5, 2.35, 0.042).
 volText(float v) =>
     float a = math.abs(v)
-    a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
+    a >= 1e9 ? str.tostring(v / 1e9, "#.#") + "B" :
+     a >= 1e6 ? str.tostring(v / 1e6, a >= 1e7 ? "#" : "#.#") + "M" :
      a >= 1e4 ? str.tostring(v / 1e3, "#") + "k" :
      a >= 1e3 ? str.tostring(v / 1e3, "#.#") + "k" :
-     str.tostring(math.round(v))
+     a >= 100 ? str.tostring(math.round(v)) :
+     a >= 10 ? str.tostring(v, "#.#") : a >= 1 ? str.tostring(v, "#.##") : str.tostring(v, "#.###")
 
 zoneColor(HZone z) =>
     float op = zoneOpacInput * (z.endBar >= 0 ? touchedOpacInput / 100 : 1.0)
@@ -301,7 +386,7 @@ finalize(Period p) =>
         i += 1
         float bottom = (p.lowTick + c.first * rt) * tick
         // a partly traded top row ends at the period's highest price
-        float top    = math.min(p.lowTick + (c.last + 1) * rt, p.highTick + fpTicksInput) * tick
+        float top    = math.min(p.lowTick + (c.last + 1) * rt, p.highTick + fpTicks) * tick
         float mid    = (bottom + top) / 2
         box b = box.new(x0, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
              bgcolor = color.new(primary ? primaryInput : secondaryInput, 100 - zoneOpacInput))
@@ -325,7 +410,7 @@ finalize(Period p) =>
         line l1 = na
         line l2 = na
         if showPocInput and (primary or pocSecondaryInput)
-            float py = (c.pocTick + 0.5) * tick
+            float py = (c.pocTick + fpTicks / 2) * tick
             int brightEnd = math.min(x0 + 6, bar_index + 1)
             l1 := line.new(x0, py, brightEnd, py, color = color.new(pocColorInput, 40), width = 2)
             if extendPocInput
@@ -397,6 +482,16 @@ var bool anyFp = false
 if not na(fp)
     anyFp := true
 
+// typical bar range of this chart, for the row size hint
+float typRange = ta.sma(high - low, 100)
+
+//@function Status text when the row size does not suit the chart, "" when it does. `fine`: also hint when the rows are
+// much finer or coarser than about 20 per typical bar.
+rowHint(string name, int used, bool fine) =>
+    int sug = math.max(1, int(math.round(niceRow(typRange / 20) / syminfo.mintick)))
+    not anyFp and typRange / (used * syminfo.mintick) > 1000 ? name + ": too many price rows per bar for the footprint - set 'Ticks per row' to " + str.tostring(sug) :
+         anyFp and fine and (used >= sug * 4 or sug >= used * 4) ? name + ": about " + str.tostring(sug) + " ticks per row suits this chart (now " + str.tostring(used) + ", setting 'Ticks per row')" : ""
+
 // ───────────────────────────────────────────── developing profile
 if barstate.islast and showLiveInput and not tfTooHigh
     if not na(livePoly)
@@ -408,5 +503,5 @@ if barstate.islast and showLiveInput and not tfTooHigh
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
     string msg = tfTooHigh ? "IDC HVN: choose a profile timeframe higher than the chart timeframe" :
-         not anyFp ? "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)" : ""
+         not anyFp ? (str.length(rowHint("IDC HVN", fpTicks, false)) > 0 ? rowHint("IDC HVN", fpTicks, false) : "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)") : ""
     table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)
