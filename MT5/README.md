@@ -10,6 +10,8 @@ Empat indikator order-flow seperti di video ProfitPro, dibuat untuk MetaTrader 5
 | `Indicators/IDCator/IDC_Pressure_Toolkit.mq5` | IDC Pressure | Bubble redup/terang, kotak big trade + angka, titik absorption di wick, garis absorption, dan level psikologis |
 | `Include/IDCator/IDCatorCore.mqh` | - | Bagian bersama: pembaca tick, footprint, statistik, gambar objek. **Wajib ikut disalin** |
 
+Contoh tampilan (data NQ M1 simulasi, dijalankan tick per tick di terminal MT5 simulasi) ada di `preview.png` dan `preview-ptk.png`.
+
 ## Penting: data dan akun
 
 - **FundedNext Futures tidak memakai MT5.** Platform resminya Tradovate, NinjaTrader, dan TradingView. Untuk akun futures di Tradovate, pakai versi **TradingView** (folder `TradingView`).
@@ -62,10 +64,24 @@ Bisa juga dicoba di Strategy Tester (mode *Visual*, model *Every tick based on r
 
 ## Pengujian
 
-MetaEditor tidak tersedia di lingkungan pembuatan, jadi file ini **belum di-compile dengan MetaEditor asli**. Sebagai gantinya, `tools/mql-check` menerjemahkan setiap indikator ke C++ dengan deklarasi API MT5. Hasilnya di-compile dengan `g++` untuk mengecek nama, jumlah parameter, dan tipe:
+MetaEditor tidak tersedia di lingkungan pembuatan, jadi file ini **belum di-compile dengan MetaEditor asli**. Sebagai gantinya, `tools/mql-check` menerjemahkan setiap indikator ke C++ dan menjalankannya di **terminal MT5 simulasi**. Terminal ini meniru tick history (`CopyTicksRange`), bar M1, `OnCalculate` di setiap tick, `OnTimer` tiap detik, dan objek chart. Index array di luar batas dan pembagian dengan nol menghentikan program, sama seperti critical error di MT5.
+
+Data uji: order flow NQ simulasi (3 jam, sekitar 89 ribu tick bursa), dan versi CFD-nya (hanya perubahan bid/ask). Ada 8 skenario:
+
+1. Lolos compile check (nama, jumlah parameter, tipe).
+2. **Realtime = history:** 27 ribu tick terakhir masuk satu per satu, hasil akhirnya sama persis dengan saat semua tick sudah jadi history.
+3. Sama juga kalau MT5 melewatkan panggilan `OnCalculate` (37 tick per panggilan).
+4. Feed CFD (tanpa transaksi): semua indikator tetap menggambar, realtime = history.
+5. **Sama dengan versi TradingView** pada data yang sama: 95 zona imbalance, 51 zona HVN, 13 lingkaran, 39 bubble, 2 big trade, 71 titik, 127 garis, dan 12 level psikologis. Posisi, label, dan titik sentuhnya identik.
+6. Alert sentuhan zona keluar sekali, tepat di detik transaksi pertama yang masuk zona.
+7. Angka di lingkaran Heavy Absorption muncul saat bar masih berjalan dan terus naik (misalnya 265 → 271 → ... → 298).
+8. Pasar sepi: bar terakhir ditutup timer 30 detik setelah waktunya habis, lalu zona HVN periode itu muncul.
 
 ```
-python3 tools/mql-check/check.py
+cd tools/pine-test && npm install && cd ../..      # sekali (dipakai bersama tes TradingView)
+python3 tools/mql-check/check.py                   # compile check
+node tools/mql-check/run.mjs --verbose             # 8 skenario
+node tools/mql-check/run.mjs --render              # + gambar di tools/mql-check/out/
 ```
 
-Aturan khusus MQL5 dicek manual. Tetap compile sekali di MetaEditor (langkah 4 di atas).
+Simulasi ini bukan MT5 asli. Tetap compile sekali di MetaEditor (langkah 4 di atas) dan cek tampilannya di chart.

@@ -487,26 +487,33 @@ string IdcTrim(const string s)
    return StringSubstr(s, 0, end);
   }
 
+//--- v rounded half away from zero to `digits` decimals (not left to DoubleToString), without trailing zeros
+string IdcNum(const double v, const int digits)
+  {
+   double f = MathPow(10, digits);
+   return IdcTrim(DoubleToString(MathRound(v * f) / f, digits));
+  }
+
 string IdcVolText(const double v, const bool upperK)
   {
    double a = MathAbs(v);
    string k = upperK ? "K" : "k";
    if(a >= 10000000)
-      return DoubleToString(v / 1000000.0, 0) + "M";
+      return IdcNum(v / 1000000.0, 0) + "M";
    if(a >= 1000000)
-      return IdcTrim(DoubleToString(v / 1000000.0, 1)) + "M";
+      return IdcNum(v / 1000000.0, 1) + "M";
    if(a >= 10000)
-      return DoubleToString(v / 1000.0, 0) + k;
+      return IdcNum(v / 1000.0, 0) + k;
    if(a >= 1000)
-      return IdcTrim(DoubleToString(v / 1000.0, 1)) + k;
-   return DoubleToString(MathRound(v), 0);
+      return IdcNum(v / 1000.0, 1) + k;
+   return IdcNum(v, 0);
   }
 
 string IdcRatioText(const double r)
   {
    if(r >= 999)
       return "999x";
-   return IdcTrim(DoubleToString(r, 1)) + "x";
+   return IdcNum(r, 1) + "x";
   }
 
 //+------------------------------------------------------------------+

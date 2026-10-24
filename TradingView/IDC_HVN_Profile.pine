@@ -300,7 +300,8 @@ finalize(Period p) =>
         bool primary = i == 0
         i += 1
         float bottom = (p.lowTick + c.first * rt) * tick
-        float top    = (p.lowTick + (c.last + 1) * rt) * tick
+        // a partly traded top row ends at the period's highest price
+        float top    = math.min(p.lowTick + (c.last + 1) * rt, p.highTick + fpTicksInput) * tick
         float mid    = (bottom + top) / 2
         box b = box.new(x0, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
              bgcolor = color.new(primary ? primaryInput : secondaryInput, 100 - zoneOpacInput))

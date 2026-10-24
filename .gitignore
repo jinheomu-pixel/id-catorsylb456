@@ -4,3 +4,4 @@ obj/
 .vs/
 node_modules/
 tools/pine-test/out/
+tools/mql-check/out/
