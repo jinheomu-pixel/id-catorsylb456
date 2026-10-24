@@ -51,7 +51,9 @@ export function renderMt5(runs, { bars: nBars = 95, width = 1400, height = 800, 
     const draw = (o) => {
         if (o.type === 'rect') {
             const x1 = xOf(o.t1), x2 = xOf(o.t2), y1 = yOf(o.p1), y2 = yOf(o.p2);
-            out.push(`<rect x="${Math.min(x1, x2)}" y="${Math.min(y1, y2)}" width="${Math.abs(x2 - x1)}" height="${Math.max(1, Math.abs(y2 - y1))}" fill="${o.color}"/>`);
+            // an unfilled rectangle is a frame (the live zones' dashed outline)
+            const paint = o.fill === 0 ? `fill="none" stroke="${o.color}" stroke-width="1"${o.style === 1 ? ' stroke-dasharray="6 4"' : ''}` : `fill="${o.color}"`;
+            out.push(`<rect x="${Math.min(x1, x2)}" y="${Math.min(y1, y2)}" width="${Math.abs(x2 - x1)}" height="${Math.max(1, Math.abs(y2 - y1))}" ${paint}/>`);
         } else if (o.type === 'trend' || o.type === 'hline') {
             const dash = o.style === 2 ? 'stroke-dasharray="2 3"' : o.style === 1 ? 'stroke-dasharray="6 4"' : '';
             if (o.type === 'hline') {

@@ -1,7 +1,7 @@
 // Hand-built order flow for deterministic scenarios, and a live (tick-by-tick) runner.
 import fs from 'node:fs';
 import { PineTS, Indicator } from 'pinets';
-import { aggregate, provider, TF } from './harness.mjs';
+import { aggregate, provider, TF, resolveScript } from './harness.mjs';
 
 export const T0 = Date.UTC(2026, 2, 2, 14, 30, 0); // Monday 08:30 Chicago
 export const barStart = (i, barSec = 15) => T0 + i * barSec * 1000;
@@ -75,6 +75,7 @@ export class Tape {
  */
 export class Live {
     constructor(file, tape, inputs = {}) {
+        ({ file, inputs } = resolveScript(file, inputs));
         this.file = file;
         this.tape = tape;
         this.inputs = inputs;

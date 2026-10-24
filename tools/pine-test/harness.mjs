@@ -123,7 +123,15 @@ export function provider(market, { symbol = 'NQ1!', withFootprint = true, info =
 
 export const TF = { 15: '15S', 30: '30S', 60: '1', 300: '5' };
 
+/** Script aliases: name -> { file, inputs } (e.g. the suite with one tool switched on); used by runPine and Live. */
+export const ALIASES = new Map();
+export function resolveScript(file, inputs = {}) {
+    const a = ALIASES.get(file);
+    return a ? { file: a.file, inputs: { ...a.inputs, ...inputs } } : { file, inputs };
+}
+
 export async function runPine(file, market, inputs = {}, opts = {}) {
+    ({ file, inputs } = resolveScript(file, inputs));
     const src = fs.readFileSync(file, 'utf8');
     const ind = new Indicator(src);
     for (const [k, v] of Object.entries(inputs)) ind.input[k] = v;
@@ -217,7 +225,8 @@ export function renderSvg(market, ctx, { from, to, width = 1280, height = 720, t
         const x1 = xOf(xi(b.left, b.xloc)) - bw / 2, x2 = xOf(xi(b.right, b.xloc)) - bw / 2;
         const y1 = yOf(b.top), y2 = yOf(b.bottom);
         const bg = parseColor(b.bgcolor), bc = parseColor(b.border_color);
-        out.push(`<rect x="${Math.min(x1, x2)}" y="${Math.min(y1, y2)}" width="${Math.abs(x2 - x1)}" height="${Math.max(1, Math.abs(y2 - y1))}" fill="${bg.css}" stroke="${bc.a > 0 ? bc.css : 'none'}" stroke-width="${b.border_width ?? 1}"/>`);
+        const dash = String(b.border_style ?? '').includes('dash') ? ' stroke-dasharray="6 4"' : '';
+        out.push(`<rect x="${Math.min(x1, x2)}" y="${Math.min(y1, y2)}" width="${Math.abs(x2 - x1)}" height="${Math.max(1, Math.abs(y2 - y1))}" fill="${bg.css}" stroke="${bc.a > 0 ? bc.css : 'none'}" stroke-width="${b.border_width ?? 1}"${dash}/>`);
         if (b.text) {
             const fs_ = pt(b.text_size) * 1.333;
             const ha = String(b.text_halign ?? 'center');

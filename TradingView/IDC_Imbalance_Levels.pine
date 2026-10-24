@@ -33,6 +33,7 @@ bool   showLabelsInput = input.bool(true, "Show labels", group = G_VIS)
 color  textColorInput  = input.color(color.rgb(224, 224, 224), "Label color", group = G_VIS)
 int    textSizeInput   = input.int(9, "Label size (pt)", minval = 5, maxval = 30, group = G_VIS)
 bool   keepTouchedInput = input.bool(true, "Keep touched zones", group = G_VIS)
+bool   showLiveInput   = input.bool(true, "Show the forming bar's stacks (live, dashed)", group = G_VIS)
 int    maxZonesInput   = input.int(300, "Max zones on chart", minval = 10, maxval = 500, group = G_VIS)
 
 G_ALR = "Alerts"
@@ -150,7 +151,6 @@ levelRatio(float aggressive, float opposite) =>
             r := aggressive
     r
 
-//@function Compact volume text: 384, 1.2k, 12k, 3.4M.
 //@function Volume label: 165, 1.2k, 3.4M; crypto volumes keep decimals (18.5, 2.35, 0.042).
 volText(float v) =>
     float a = math.abs(v)
@@ -170,15 +170,20 @@ zoneOpacity(float r) =>
     float t = math.max(0.0, math.min(1.0, (r - minRatioInput) / math.max(0.0001, fullRatioInput - minRatioInput)))
     minOpacInput + (maxOpacInput - minOpacInput) * t
 
-newZone(bool support, float bottom, float top, float ratio, float stackVol) =>
+//@function Box of a stack from this bar. `live`: a stack of the forming bar, with a dashed outline.
+zoneBox(bool support, float bottom, float top, float ratio, float stackVol, bool live) =>
     color c = support ? supColorInput : resColorInput
     float op = zoneOpacity(ratio)
     string txt = showLabelsInput ? ratioText(ratio) + " | " + volText(stackVol) : ""
-    box b = box.new(bar_index, top, bar_index + 1, bottom,
-         border_color = color.new(c, 100 - math.min(100.0, op * 1.35 + 4)), border_width = 1,
+    box.new(bar_index, top, bar_index + 1, bottom,
+         border_color = live ? color.new(c, 20) : color.new(c, 100 - math.min(100.0, op * 1.35 + 4)), border_width = 1,
+         border_style = live ? line.style_dashed : line.style_solid,
          bgcolor = color.new(c, 100 - op), text = txt, text_size = textSizeInput, text_color = textColorInput,
          text_halign = text.align_right, text_valign = text.align_center, text_wrap = text.wrap_none,
          text_formatting = text.format_bold)
+
+newZone(bool support, float bottom, float top, float ratio, float stackVol) =>
+    box b = zoneBox(support, bottom, top, ratio, stackVol, false)
     zones.push(Zone.new(b, bottom, top, support, bar_index, -1, ratio, stackVol))
     // keep the chart within the drawing budget: drop the oldest touched zone first, then the oldest one
     if zones.size() > maxZonesInput
@@ -224,9 +229,19 @@ if alertTouchInput and str.length(touchMsg) > 0
         sentMsg := touchMsg
         alert(syminfo.ticker + " touched imbalance " + touchMsg, alert.freq_all)
 
-// ───────────────────────────────────────────── stacks of the bar that just closed
-if barstate.isconfirmed and not na(fp)
-    array<volume_row> rows = fp.rows()
+// ───────────────────────────────────────────── stacks: the closed bar's become zones, the forming bar's show live
+type Stack
+    bool  support
+    float bottom
+    float top
+    float ratio
+    float volume
+
+//@function Stacked diagonal imbalances of a footprint. With the close filter, buy stacks must lie below `closePx` and
+// sell stacks above it.
+stacksOf(footprint f, float closePx) =>
+    array<Stack> out = array.new<Stack>()
+    array<volume_row> rows = f.rows()
     int n = rows.size()
     if n >= 2
         // buy stacks: row i buy vs row i-1 sell (rows ascend in price)
@@ -248,9 +263,9 @@ if barstate.isconfirmed and not na(fp)
                 int runEnd = i - 1
                 float bottom = rows.get(runStart).down_price()
                 float top    = rows.get(runEnd).up_price()
-                bool  okSide = not beyondCloseInput or top - tick * 0.5 < close
+                bool  okSide = not beyondCloseInput or top - tick * 0.5 < closePx
                 if runEnd - runStart + 1 >= minStackInput and runVol >= minStackVolInput and okSide
-                    newZone(true, bottom, top, runMax, runVol)
+                    out.push(Stack.new(true, bottom, top, runMax, runVol))
                 runStart := -1
         // sell stacks: row i sell vs row i+1 buy
         runStart := -1
@@ -258,7 +273,7 @@ if barstate.isconfirmed and not na(fp)
             float r = na
             if i < n - 1
                 r := levelRatio(rows.get(i).sell_volume(), rows.get(i + 1).buy_volume())
-            if not na(r) and r >= minRatioInput * (1 - 1e-9)   // fractional (crypto) volumes: a ratio of exactly 5 may sum to 4.9999999
+            if not na(r) and r >= minRatioInput * (1 - 1e-9)
                 if runStart < 0
                     runStart := i
                     runMax   := r
@@ -269,10 +284,19 @@ if barstate.isconfirmed and not na(fp)
                 int runEnd = i - 1
                 float bottom = rows.get(runStart).down_price()
                 float top    = rows.get(runEnd).up_price()
-                bool  okSide = not beyondCloseInput or bottom > close + tick * 0.5
+                bool  okSide = not beyondCloseInput or bottom > closePx + tick * 0.5
                 if runEnd - runStart + 1 >= minStackInput and runVol >= minStackVolInput and okSide
-                    newZone(false, bottom, top, runMax, runVol)
+                    out.push(Stack.new(false, bottom, top, runMax, runVol))
                 runStart := -1
+    out
+
+if barstate.isconfirmed and not na(fp)
+    for st in stacksOf(fp, close)
+        newZone(st.support, st.bottom, st.top, st.ratio, st.volume)
+// the forming bar: its stacks so far, dashed, redrawn on every update until the bar closes
+if showLiveInput and barstate.islast and not barstate.isconfirmed and not na(fp)
+    for st in stacksOf(fp, close)
+        zoneBox(st.support, st.bottom, st.top, st.ratio, st.volume, true)
 
 // ───────────────────────────────────────────── status
 var bool anyFp = false

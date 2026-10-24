@@ -14,6 +14,7 @@ G_GEN = "General"
 int    rowTicksInput  = input.int(0, "Ticks per row (0 = auto)", minval = 0, group = G_GEN,
      tooltip = "0 = auto: 1 tick on futures and stocks; on crypto about 20 rows across a typical bar of this timeframe. The Data Window shows the value in use.")
 int    lookbackInput  = input.int(50, "Lookback bars (statistics)", minval = 5, maxval = 2000, group = G_GEN)
+int    maxLabelsInput = input.int(450, "Max markers on chart (labels)", minval = 20, maxval = 480, group = G_GEN)
 
 G_BUB = "Pressure bubbles"
 bool   showBubblesInput = input.bool(true, "Show bubbles", group = G_BUB)
@@ -39,6 +40,7 @@ float  absKInput      = input.float(1.0, "Wick level (std dev)", minval = 0, ste
 float  enhKInput      = input.float(2.5, "Enhanced (std dev)", minval = 0, step = 0.1, group = G_ABS)
 float  minWickPctInput = input.float(15, "Min wick share of bar volume %", minval = 0, maxval = 100, group = G_ABS)
 bool   showLinesInput = input.bool(true, "Show absorption lines", group = G_ABS)
+bool   liveLinesInput = input.bool(true, "Show the forming bar's lines (live, dashed)", group = G_ABS)
 int    maxLinesWickInput = input.int(8, "Max lines per wick", minval = 1, maxval = 30, group = G_ABS)
 int    lineTranspInput = input.int(20, "Line transparency %", minval = 0, maxval = 100, group = G_ABS)
 int    maxLinesInput  = input.int(400, "Max lines on chart", minval = 10, maxval = 440, group = G_ABS)
@@ -196,6 +198,13 @@ float bigThr    = math.max(mMean + bigKInput * mSd, weakThr)
 float wickThr   = lMean + absKInput * lSd
 float enhThr    = lMean + enhKInput * lSd
 
+// markers of this script, oldest first (trimmed to the budget at each bar close)
+var array<label> marks = array.new<label>()
+//@function Records a marker label for the chart budget.
+keep(label l) =>
+    marks.push(l)
+    l
+
 bubbleSize(float v) =>
     float t = math.sqrt(math.max(0.0, math.min(1.0, (v / math.max(weakThr, 1e-9) - 1) / 3)))
     int(math.round(bubbleMinInput + (bubbleMaxInput - bubbleMinInput) * t))
@@ -233,15 +242,15 @@ if not na(fp)
                     float px = pxs.get(idx.get(k))
                     bool strong = v >= strongThr
                     if showBubblesInput
-                        label.new(bar_index, px, "●", style = label.style_label_center, color = color.new(color.black, 100),
-                             textcolor = color.new(c, strong ? strongTranspInput : weakTranspInput), size = bubbleSize(v))
+                        keep(label.new(bar_index, px, "●", style = label.style_label_center, color = color.new(color.black, 100),
+                             textcolor = color.new(c, strong ? strongTranspInput : weakTranspInput), size = bubbleSize(v)))
                     if strong
                         alertMsg += (side == 0 ? "strong buy bubble " : "strong sell bubble ") + str.tostring(px, format.mintick) + "  "
                     if showBigInput and k == 0 and v >= bigThr
-                        label.new(bar_index, px, "□", style = label.style_label_center, color = color.new(color.black, 100),
-                             textcolor = side == 0 ? color.rgb(120, 230, 120) : color.rgb(240, 110, 100), size = bigSizeInput)
-                        label.new(bar_index, px, volText(v), style = side == 0 ? label.style_label_up : label.style_label_down,
-                             color = color.new(color.black, 100), textcolor = textColorInput, size = 9)
+                        keep(label.new(bar_index, px, "□", style = label.style_label_center, color = color.new(color.black, 100),
+                             textcolor = side == 0 ? color.rgb(120, 230, 120) : color.rgb(240, 110, 100), size = bigSizeInput))
+                        keep(label.new(bar_index, px, volText(v), style = side == 0 ? label.style_label_up : label.style_label_down,
+                             color = color.new(color.black, 100), textcolor = textColorInput, size = 9))
                         alertMsg += "big " + (side == 0 ? "buy " : "sell ") + volText(v) + " @ " + str.tostring(px, format.mintick) + "  "
         // absorption: heavy volume traded in a wick (rows outside the body)
         float bodyTop = math.max(open, close)
@@ -265,18 +274,21 @@ if not na(fp)
             if dot
                 bool enhanced = maxLevel >= enhThr
                 if showDotsInput
-                    label.new(bar_index, atHigh ? high : low, "", yloc = atHigh ? yloc.abovebar : yloc.belowbar, style = label.style_circle,
-                         color = atHigh ? dotBearInput : dotBullInput, size = enhanced ? size.small : size.tiny)
+                    keep(label.new(bar_index, atHigh ? high : low, "", yloc = atHigh ? yloc.abovebar : yloc.belowbar, style = label.style_circle,
+                         color = atHigh ? dotBearInput : dotBullInput, size = enhanced ? size.small : size.tiny))
                 alertMsg += (enhanced ? "enhanced " : "") + "absorption dot " + (atHigh ? "above " : "below ") + str.tostring(atHigh ? high : low, format.mintick) + "  "
-                // absorption lines from the heaviest wick prices, only once the bar is final
-                if showLinesInput and barstate.isconfirmed and heavyVol.size() > 0
+                // absorption lines from the heaviest wick prices: kept once the bar is final, dashed while it forms
+                bool liveBar = liveLinesInput and barstate.islast and not barstate.isconfirmed
+                if showLinesInput and (barstate.isconfirmed or liveBar) and heavyVol.size() > 0
                     array<int> idx = heavyVol.sort_indices(order.descending)
                     for k = 0 to math.min(maxLinesWickInput, idx.size()) - 1
                         float px = heavyPx.get(idx.get(k))
                         // aggressor that was absorbed: buyers at an upper wick (green), sellers at a lower wick (red)
                         color c = atHigh ? buyColorInput : sellColorInput
-                        line l = line.new(bar_index, px, bar_index + 1, px, color = color.new(c, lineTranspInput), width = 1)
-                        lines.push(ALine.new(l, px, bar_index, -1))
+                        line l = line.new(bar_index, px, bar_index + 1, px, color = color.new(c, lineTranspInput), width = 1,
+                             style = barstate.isconfirmed ? line.style_solid : line.style_dashed)
+                        if barstate.isconfirmed
+                            lines.push(ALine.new(l, px, bar_index, -1))
 
 // ───────────────────────────────────────────── absorption lines: extend until price returns (gap aware)
 float hiR = math.max(high, nz(close[1], high))
@@ -290,6 +302,8 @@ for al in lines
         else
             al.ln.set_x2(bar_index + 1)
 if barstate.isconfirmed
+    while marks.size() > maxLabelsInput
+        marks.shift().delete()
     while lines.size() > maxLinesInput
         int drop = 0
         for [k, al] in lines

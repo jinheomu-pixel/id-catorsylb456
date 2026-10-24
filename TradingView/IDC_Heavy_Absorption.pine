@@ -37,8 +37,8 @@ float  fullRatioInput = input.float(6, "Absolute: volume / threshold at max size
 int    maxMarkersInput = input.int(160, "Max markers on chart", minval = 10, maxval = 166, group = G_VIS)
 
 G_ALR = "Alerts"
-bool   alertInput     = input.bool(false, "Alert on bar close", group = G_ALR,
-     tooltip = "Create an alert on this indicator with 'Any alert() function call'.")
+string alertModeInput = input.string("Off", "Alert", options = ["Off", "Live (when a circle appears)", "On bar close"], group = G_ALR,
+     tooltip = "Create an alert on this indicator with 'Any alert() function call'. Live: once per bar and side, on the tick the circle appears.")
 
 // ───────────────────────────────────────────── data
 // ───────────────────────────────────────────── footprint row size
@@ -234,8 +234,21 @@ if barstate.isconfirmed and not na(fp)
         old.txt.delete()
         if not na(old.ring)
             old.ring.delete()
-    if alertInput and str.length(alertMsg) > 0
+    if alertModeInput == "On bar close" and str.length(alertMsg) > 0
         alert(syminfo.ticker + " " + alertMsg, alert.freq_once_per_bar_close)
+
+// live alert: the first update of a bar on which a buy (or sell) circle shows
+varip int    sentBar   = -1
+varip string sentSides = ""
+if alertModeInput == "Live (when a circle appears)" and str.length(alertMsg) > 0
+    if sentBar != bar_index
+        sentBar   := bar_index
+        sentSides := ""
+    string fresh = (str.contains(alertMsg, "BUY") and not str.contains(sentSides, "B") ? "B" : "") +
+         (str.contains(alertMsg, "SELL") and not str.contains(sentSides, "S") ? "S" : "")
+    if str.length(fresh) > 0
+        sentSides += fresh
+        alert(syminfo.ticker + " " + alertMsg, alert.freq_all)
 
 // relative sizing: the biggest marker on the chart sets the scale (recomputed on the last bar only)
 if barstate.islast and sizingInput == "Relative to markers" and markers.size() > 0

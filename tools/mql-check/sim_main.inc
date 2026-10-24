@@ -112,7 +112,8 @@ static std::string SimObjects()
         << ",\"t1\":" << x.time[0] << ",\"t2\":" << x.time[1] << ",\"p1\":" << x.price[0] << ",\"p2\":" << x.price[1]
         << ",\"color\":" << SimColor(get(OBJPROP_COLOR, 0)) << ",\"text\":" << SimJson(x.text) << ",\"font\":" << SimJson(x.font)
         << ",\"size\":" << get(OBJPROP_FONTSIZE, 10) << ",\"anchor\":" << get(OBJPROP_ANCHOR, 0) << ",\"width\":" << get(OBJPROP_WIDTH, 1)
-        << ",\"style\":" << get(OBJPROP_STYLE, 0) << ",\"back\":" << get(OBJPROP_BACK, 0) << ",\"ray\":" << get(OBJPROP_RAY_RIGHT, 0) << "}";
+        << ",\"style\":" << get(OBJPROP_STYLE, 0) << ",\"back\":" << get(OBJPROP_BACK, 0) << ",\"ray\":" << get(OBJPROP_RAY_RIGHT, 0)
+        << ",\"fill\":" << get(OBJPROP_FILL, 0) << "}";
       first = false;
      }
    o << "]";

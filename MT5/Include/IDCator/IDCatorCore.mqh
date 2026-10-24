@@ -201,6 +201,18 @@ public:
    double            RowLow(const int i) const { return (double)(lowRow + i) * rowSize; }
    double            Total(const int i) const { return buy[i] + sell[i]; }
    void              Add(const double price, const double vol, const int side);
+   void              CopyFrom(const CIdcFootprint &o)
+     {
+      lowRow = o.lowRow;
+      rowSize = o.rowSize;
+      ArrayResize(buy, ArraySize(o.buy));
+      ArrayResize(sell, ArraySize(o.sell));
+      for(int i = 0; i < ArraySize(o.buy); i++)
+        {
+         buy[i] = o.buy[i];
+         sell[i] = o.sell[i];
+        }
+     }
    double            TotalVolume(void) const
      {
       double t = 0;
@@ -371,14 +383,17 @@ protected:
    bool              m_loading;      // history ticks not available yet
    ENUM_IDC_TICKSRC  m_src;
    int               m_maxBars;
+   int               m_hostTrades;   // set by a host feed (IDC_OrderFlow): 1 trades, 0 quotes; -1 = own reader
 
 public:
                      CIdcFeed(void) { m_curBar = -1; m_curBarTime = 0; m_closedBar = -1; m_hint = 0; m_liveFromMsc = 0;
                                       m_lastTradeMsc = 0; m_lastArrival = 0; m_started = false; m_loading = false;
-                                      m_src = IDC_TICKS_AUTO; m_maxBars = 1000; }
+                                      m_src = IDC_TICKS_AUTO; m_maxBars = 1000; m_hostTrades = -1; }
    void              Setup(const ENUM_IDC_TICKSRC src, const int maxBars) { m_src = src; m_maxBars = MathMax(10, maxBars); }
    bool              Loading(void) const { return m_loading; }
-   bool              UsesTrades(void) const { return m_reader.UsesTrades(); }
+   bool              UsesTrades(void) const { return m_hostTrades >= 0 ? m_hostTrades == 1 : m_reader.UsesTrades(); }
+   //--- a module driven by another feed (IDC_OrderFlow) learns from it whether trades or quotes are read
+   void              HostTrades(const bool trades) { m_hostTrades = trades ? 1 : 0; }
    bool              Started(void) const { return m_started; }
    int               CurrentBar(void) const { return m_curBar; }
    virtual void      OnReset(void) {}
@@ -567,6 +582,26 @@ void IdcRect(const string name, const datetime t1, const double p1, const dateti
    ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
    ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
    ObjectSetInteger(0, name, OBJPROP_COLOR, fill);
+  }
+
+//--- outline only (a filled MT5 rectangle has no visible border): the dashed frame of a live (forming) zone
+void IdcFrame(const string name, const datetime t1, const double p1, const datetime t2, const double p2, const color clr)
+  {
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
+      ObjectSetInteger(0, name, OBJPROP_FILL, false);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+     }
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
   }
 
 void IdcText(const string name, const datetime t, const double p, const string text, const color clr, const int size,

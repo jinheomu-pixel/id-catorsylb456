@@ -185,7 +185,7 @@ scenario('MT5-10 Bitcoin: same as TradingView', 'both forced to $5 rows (500 tic
     const dir = path.join(OUT, 'compare-btc');
     fs.mkdirSync(dir, { recursive: true });
     for (const ind of IND) {
-        const rows = ['--set', 'InpRowPoints=500', ...(ind === 'IDC_HVN_Profile' ? ['--set', 'InpBasePoints=500'] : [])];
+        const rows = ind === 'IDC_HVN_Profile' ? ['--set', 'InpHvnRowPoints=500', '--set', 'InpHvnBasePoints=500'] : ['--set', 'InpRowPoints=500'];
         fs.writeFileSync(path.join(dir, ind + '.json'), JSON.stringify(sim(ind, BTC_TRADES, 'btc-500', ['--tick', 0.01, '--quiet', 120, ...rows])));
     }
     const t500 = { 'Ticks per row (0 = auto)': 500 };
@@ -194,6 +194,77 @@ scenario('MT5-10 Bitcoin: same as TradingView', 'both forced to $5 rows (500 tic
     const failed = await compareAll(dir, (s) => lines.push(s), { market: btc, info: BTC_INFO, inputs });
     c.eq(0, failed, 'indicators that differ');
     for (const l of lines) (l.startsWith('SAME') ? c.note(l) : c.fails.push(l));
+});
+
+// ───────────────── IDC Order Flow: the four tools in one indicator, one tick feed
+const SUITE_ALL = ['--set', 'InpOnPtk=true'];
+function union(runs) {
+    return { bars: runs[0].bars, period: runs[0].period, objects: runs.flatMap((r) => r.objects), alerts: runs.flatMap((r) => r.alerts) };
+}
+
+scenario('MT5-11 IDC Order Flow = the four tools together', 'all four switched on: exactly the objects of the four single indicators, on NQ and on Bitcoin', async (c) => {
+    for (const [label, ticks, extra] of [['NQ', TRADES, []], ['BTC', BTC_TRADES, ['--tick', 0.01]]]) {
+        const singles = IND.map((ind) => sim(ind, ticks, label + '-single', [...extra, '--quiet', 120]));
+        const suite = sim('IDC_OrderFlow', ticks, label + '-suite', [...extra, '--quiet', 120, ...SUITE_ALL]);
+        sameObjects(c, `${label} suite`, union(singles), suite);
+        c.note(`${label}: ${suite.objects.length} objects`);
+    }
+});
+
+scenario('MT5-12 IDC Order Flow realtime = history', 'all four on, the last ticks arrive live one by one: same chart as from history', async (c) => {
+    const h = sim('IDC_OrderFlow', TRADES, 'suite-hist', ['--quiet', 120, ...SUITE_ALL]);
+    const l = sim('IDC_OrderFlow', TRADES, 'suite-live', ['--hist', LIVE_FROM, '--quiet', 120, ...SUITE_ALL]);
+    sameObjects(c, 'suite', h, l);
+    c.note(`${h.objects.length} objects, ${l.alerts.length} live alerts`);
+});
+
+const ticksOfBar = (b) => trades.reduce((a, k, i) => (i >= LIVE_FROM && bar(Math.floor(k[0] / 1000)) === b ? [...a, i] : a), []);
+// the bar closes on the next bar's first trade (a quote change before it does not close it)
+const firstTickOfBar = (b) => trades.findIndex((k, i) => i >= LIVE_FROM && bar(Math.floor(k[0] / 1000)) === b && (k[5] & 8) !== 0);
+
+scenario('MT5-13 live signals of the forming bar', 'imbalance stacks, HVN nodes and absorption lines show dashed while the bar (period) forms and become final at its close', async (c) => {
+    // imbalance: a bar that leaves a zone
+    const imbFinal = liveRun('IDC_Imbalance_Levels');
+    const zb = imbFinal.objects.filter((o) => o.name.startsWith('IDCimb_z')).map((o) => bar(o.t1)).find((b) => b > liveBar && b < lastBar - 1);
+    if (c.check(zb !== undefined, 'a zone from a live bar')) {
+        const idx = ticksOfBar(zb);
+        const snap = sim('IDC_Imbalance_Levels', TRADES, 'snap-imb', ['--hist', LIVE_FROM, '--snap', [...idx, firstTickOfBar(zb + 1)].join(',')]).snapshots;
+        const during = snap.slice(0, -1), after = snap[snap.length - 1];
+        const liveAt = during.findIndex((s) => s.objects.some((o) => o.name.startsWith('IDCimb_L') && o.name.endsWith('f') && o.style === 1));
+        c.check(liveAt >= 0 && liveAt < during.length - 1, `dashed live box during bar ${zb} (from tick ${liveAt + 1} of ${during.length})`);
+        c.check(during.every((s) => !s.objects.some((o) => o.name.startsWith('IDCimb_z') && bar(o.t1) === zb)), 'no final zone before the close');
+        c.check(after.objects.some((o) => o.name.startsWith('IDCimb_z') && bar(o.t1) === zb), 'final zone after the close');
+        c.check(!after.objects.some((o) => o.name.startsWith('IDCimb_L') && bar(o.t1) === zb), 'live box of the closed bar removed');
+    }
+    // HVN: the middle of a live period
+    const pb = liveBar + 6 - (liveBar % 5) + 2;
+    const hv = sim('IDC_HVN_Profile', TRADES, 'snap-hvn', ['--hist', LIVE_FROM, '--snap', ticksOfBar(pb)[5]]).snapshots[0].objects;
+    const frames = hv.filter((o) => o.name.startsWith('IDChvn_L') && o.name.endsWith('f'));
+    c.check(frames.length >= 1 && frames.every((o) => o.style === 1 && bar(o.t1) === pb - (pb % 5)), `dashed nodes of the forming period from its first bar: ${frames.length}`);
+    c.check(!liveRun('IDC_HVN_Profile').objects.some((o) => o.name.startsWith('IDChvn_L')), 'no live nodes left at the end');
+    // absorption lines: a bar that leaves lines
+    const ptkFinal = liveRun('IDC_Pressure_Toolkit');
+    const lb = ptkFinal.objects.filter((o) => o.type === 'trend' && /^IDCptk_L\d+$/.test(o.name)).map((o) => bar(o.t1)).find((b) => b > liveBar && b < lastBar - 1);
+    if (c.check(lb !== undefined, 'absorption lines from a live bar')) {
+        const snap = sim('IDC_Pressure_Toolkit', TRADES, 'snap-ptk', ['--hist', LIVE_FROM, '--snap', [...ticksOfBar(lb), firstTickOfBar(lb + 1)].join(',')]).snapshots;
+        const isLive = (o) => o.type === 'trend' && o.name.startsWith(`IDCptk_b${lb}_L`) && o.style === 1;
+        c.check(snap.slice(0, -1).some((s) => s.objects.some(isLive)), `dashed lines while bar ${lb} forms`);
+        const after = snap[snap.length - 1].objects;
+        c.check(!after.some(isLive) && after.some((o) => /^IDCptk_L\d+$/.test(o.name) && bar(o.t1) === lb && o.style === 0), 'solid lines after the close');
+    }
+});
+
+scenario('MT5-14 Heavy Absorption live alert', "alert mode 'Live': an alert inside the bar a circle appears, at most once per side and bar", async (c) => {
+    const r = sim('IDC_Heavy_Absorption', TRADES, 'ha-live-alert', ['--hist', LIVE_FROM, '--quiet', 120, '--set', 'InpHaAlert=1']);
+    const marks = r.objects.filter((o) => o.name.startsWith('IDCha_t') && bar(o.t1) > liveBar);
+    const al = r.alerts.filter((a) => /heavy (BUY|SELL)/.test(a.msg));
+    c.check(marks.length >= 1 && al.length >= 1, `markers in live bars ${marks.length}, alerts ${al.length}`);
+    for (const m of marks) {
+        const b = bar(m.t1), t = t0 + b * 60;
+        const inBar = al.filter((a) => a.wall >= t && a.wall < t + 60);
+        c.check(inBar.length >= 1 && inBar.length <= 2, `bar ${b}: ${inBar.length} alert(s) during the bar`);
+    }
+    c.note(al.slice(0, 2).map((a) => a.msg).join(' / '));
 });
 
 let failed = 0;

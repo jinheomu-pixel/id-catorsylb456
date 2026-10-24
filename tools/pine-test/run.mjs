@@ -7,15 +7,23 @@
 // Exit code = number of failed scenarios.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser } from './harness.mjs';
+import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser, ALIASES } from './harness.mjs';
 import { Tape, Live, barStart } from './tape.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TV = path.join(here, '..', '..', 'TradingView');
-const IMB = path.join(TV, 'IDC_Imbalance_Levels.pine');
-const HVN = path.join(TV, 'IDC_HVN_Profile.pine');
-const HA = path.join(TV, 'IDC_Heavy_Absorption.pine');
-const PTK = path.join(TV, 'IDC_Pressure_Toolkit.pine');
+// --suite: the tool scenarios run on IDC Order Flow (the four tools in one script) with only that tool switched on
+const ON_SUITE = process.argv.includes('--suite');
+const tool = (file, name) => {
+    if (!ON_SUITE) return path.join(TV, file);
+    const sw = Object.fromEntries(['HVN Profile', 'Imbalance Levels', 'Heavy Absorption', 'Pressure Toolkit'].map((n) => [n, n === name]));
+    ALIASES.set('suite:' + name, { file: path.join(TV, 'IDC_OrderFlow.pine'), inputs: sw });
+    return 'suite:' + name;
+};
+const IMB = tool('IDC_Imbalance_Levels.pine', 'Imbalance Levels');
+const HVN = tool('IDC_HVN_Profile.pine', 'HVN Profile');
+const HA = tool('IDC_Heavy_Absorption.pine', 'Heavy Absorption');
+const PTK = tool('IDC_Pressure_Toolkit.pine', 'Pressure Toolkit');
 const OUT = path.join(here, 'out');
 
 const args = process.argv.slice(2);
@@ -35,6 +43,9 @@ class Ctx {
 }
 
 const near = (a, b) => Math.abs(a - b) < 1e-6;
+// live (forming bar / period) drawings have a dashed outline; permanent ones a solid one
+const dashed = (o) => /dash/.test(String(o.border_style ?? o.style ?? ''));
+const solid = (list) => list.filter((o) => !dashed(o));
 const balanced = (lo, hi, v, tick = 0.25) => { const out = []; for (let p = lo; p <= hi + 1e-9; p += tick) out.push({ price: Math.round(p / tick) * tick, ask: v, bid: v }); return out; };
 
 // ═════════════════════════════════════════════ Imbalance Levels
@@ -149,6 +160,31 @@ scenario('IMB-06 realtime: second zone touched later in the bar alerts too', 'ba
     } finally { live.stop(); }
 });
 
+scenario('IMB-07 realtime: the forming bar shows its stack live', 'bar 1 builds its buy stack tick by tick: a dashed zone shows before the close, a solid one stays after it', async (c) => {
+    const t = buyStackTape(4);
+    const trades = [...t.trades].sort((a, b) => a.time - b.time);
+    const first1 = trades.findIndex((x) => x.time >= barStart(1));
+    const first2 = trades.findIndex((x) => x.time >= barStart(2));
+    const live = new Live(IMB, t);
+    try {
+        await live.start(trades[first1 - 1].time);
+        let firstLive = -1, lastLabel = '';
+        for (let i = first1; i < first2; i++) {
+            const d = drawings(await live.to(trades[i].time));
+            const lv = d.boxes.filter(dashed);
+            c.check(solid(d.boxes).length === 0, `no final zone during bar 1 (update ${i - first1})`);
+            if (lv.length && firstLive < 0) firstLive = i - first1;
+            if (lv.length) lastLabel = String(lv[0].text);
+        }
+        c.check(firstLive >= 0 && first1 + firstLive < first2 - 1, `the stack shows live before the bar's last trade (update ${firstLive} of ${first2 - first1})`);
+        c.eq('12.5x | 165', lastLabel, 'live label at the last trade of bar 1');
+        const d = drawings(await live.to(trades[first2].time));
+        c.eq(1, solid(d.boxes).length, 'one final zone after the close');
+        c.eq('12.5x | 165', String(solid(d.boxes)[0]?.text), 'final label');
+        c.eq(0, d.boxes.filter(dashed).length, 'the live outline is gone');
+    } finally { live.stop(); }
+});
+
 // ═════════════════════════════════════════════ HVN Profile
 /** One 5-minute period (20 bars of 15 s) whose profile is base + nodes at `primary` (heavier) and `secondary`. */
 function hvnPeriod(t, firstBar, lo, hi, primary, secondary, primaryBuy = 0.65, secondaryBuy = 0.40) {
@@ -220,13 +256,15 @@ scenario('HVN-02 realtime: period closes with its last bar', 'zones of a period 
     try {
         const lastOf19 = trades.filter((x) => x.time < barStart(20)).pop();
         await live.start(trades.find((x) => x.time >= barStart(19)).time);
-        c.eq(0, drawings(live.ctx).boxes.length, 'no zones while the period runs');
+        c.eq(0, solid(drawings(live.ctx).boxes).length, 'no final zones while the period runs');
+        c.eq(2, drawings(live.ctx).boxes.filter(dashed).length, 'the running period shows its 2 nodes live (dashed)');
         await live.to(lastOf19.time);
-        c.eq(0, drawings(live.ctx).boxes.length, 'still none before the bar closes');
+        c.eq(0, solid(drawings(live.ctx).boxes).length, 'still no final zones before the bar closes');
         const ctx = await live.to(barStart(20) - 1);
         c.check(drawings(ctx).boxes.length >= 0, 'bar 19 close');
         const after = await live.to(trades.find((x) => x.time >= barStart(20)).time);
-        c.eq(2, drawings(after).boxes.length, 'both period-1 zones exist on the first tick of the next period');
+        c.eq(2, solid(drawings(after).boxes).length, 'both period-1 zones are final on the first tick of the next period');
+        c.eq(0, drawings(after).boxes.filter(dashed).length, 'no live outline left over');
     } finally { live.stop(); }
 });
 
@@ -275,6 +313,27 @@ scenario('HA-02 realtime count-up', 'the circle appears on the heavy print and i
     } finally { live.stop(); }
 });
 
+scenario('HA-04 live alert when the circle appears', "alert mode 'Live': one alert on the update the 120-lot circle appears, none for the later count-up", async (c) => {
+    const t = populationTape();
+    const time = barStart(150) + 1000;
+    t.trades.push({ time, price: 25001.00, size: 120, buy: true }, { time: time + 2000, price: 25001.00, size: 9, buy: true }, { time: time + 4000, price: 25001.00, size: 11, buy: true });
+    t.filler(151, 25001.25, 25001.5, 25001, 25001.75, 2);
+    t.bars = 152;
+    const live = new Live(HA, t, { Alert: 'Live (when a circle appears)' });
+    const count = () => (live.ctx.alerts ?? []).filter((a) => String(a.message).includes('heavy BUY')).length;
+    try {
+        await live.start(time - 1);
+        c.eq(0, count(), 'no alert before the heavy print');
+        const seen = [];
+        for (const ts of [time, time + 2000, time + 4000]) {
+            await live.to(ts);
+            seen.push(count());
+        }
+        c.eq('1,1,1', seen.join(','), 'alerts after each update');
+        c.note(String((live.ctx.alerts ?? [])[0]?.message));
+    } finally { live.stop(); }
+});
+
 scenario('HA-03 uniform volume marks nothing', 'every price trades the same: no markers', async (c) => {
     const t = new Tape();
     for (let i = 0; i < 120; i++) t.filler(i, 5000, 5000.25, 4999.5, 5000.75, 4);
@@ -283,7 +342,8 @@ scenario('HA-03 uniform volume marks nothing', 'every price trades the same: no 
 });
 
 // ═════════════════════════════════════════════ Pressure Toolkit
-scenario('PTK-01 bubble, big trade, absorption dot and lines', 'heavy buy price -> bright bubble + square + number; heavy upper wick -> red dot and green lines until price returns', async (c) => {
+/** Quiet bars, then bar 80 with a 90-lot buy price and bar 81 with a heavy upper wick (5002.50 / 5002.75). */
+function ptkTape() {
     const t = new Tape();
     for (let b = 0; b < 80; b++) {
         const mid = 5000.75 + ((b % 4) - 2) * 0.25;
@@ -300,6 +360,11 @@ scenario('PTK-01 bubble, big trade, absorption dot and lines', 'heavy buy price 
     for (let b = 82; b < 85; b++) t.filler(b, 5001.0, 5001.25, 5000.5, 5001.75);
     t.filler(85, 5001.75, 5002.25, 5001.5, 5002.5);
     t.filler(86, 5002.0, 5002.0, 5001.75, 5002.25);
+    return t;
+}
+
+scenario('PTK-01 bubble, big trade, absorption dot and lines', 'heavy buy price -> bright bubble + square + number; heavy upper wick -> red dot and green lines until price returns', async (c) => {
+    const t = ptkTape();
     const ctx = await runPine(PTK, t.market());
     const d = drawings(ctx);
     const at = (bar) => d.labels.filter((l) => l.x === bar);
@@ -317,6 +382,27 @@ scenario('PTK-01 bubble, big trade, absorption dot and lines', 'heavy buy price 
     if (l250) c.eq(85, l250.x2, 'the 5002.50 line ends at bar 85 (price returns)');
     const l275 = lines.find((l) => near(l.y1, 5002.75));
     if (l275) c.check(l275.x2 > 86, `the 5002.75 line is still open (x2 ${l275.x2})`);
+});
+
+scenario('PTK-03 realtime: absorption lines of the forming bar', 'bar 81 builds a heavy upper wick: dashed lines show live, solid ones stay after the close', async (c) => {
+    const t = ptkTape();
+    const trades = [...t.trades].sort((a, b) => a.time - b.time);
+    const first81 = trades.findIndex((x) => x.time >= barStart(81));
+    const first82 = trades.findIndex((x) => x.time >= barStart(82));
+    const live = new Live(PTK, t);
+    try {
+        await live.start(trades[first81 - 1].time);
+        let seenLive = false;
+        for (let i = first81; i < first82; i++) {
+            const d = drawings(await live.to(trades[i].time));
+            if (d.lines.some((l) => l.x1 === 81 && dashed(l))) seenLive = true;
+            c.check(!d.lines.some((l) => l.x1 === 81 && !dashed(l)), 'no final line during bar 81');
+        }
+        c.check(seenLive, 'dashed lines from bar 81 while it forms');
+        const d = drawings(await live.to(trades[first82].time));
+        const fin = d.lines.filter((l) => l.x1 === 81);
+        c.check(fin.length >= 2 && fin.every((l) => !dashed(l)), `solid lines after the close: ${fin.length}`);
+    } finally { live.stop(); }
 });
 
 scenario('PTK-02 psychological step', 'auto step about 0.3% of price in whole ticks: NQ 29800 -> 100, ES 6500 -> 25, GC 4100 -> 10, CL 62 -> 0.25', async (c) => {
@@ -354,7 +440,8 @@ function btcMarket(barSec = 60) {
     }
     return scaleMarket(makeMarket({ seed: 7, barSec, segments: segs }));
 }
-const ticksUsed = (ctx, title = 'Ticks per row') => ctx.plots?.[title]?.data?.at(-1)?.value;
+// (IDC Order Flow has one shared 'Ticks per row' for all tools)
+const ticksUsed = (ctx, title = 'Ticks per row') => (ctx.plots?.[title] ?? ctx.plots?.['Ticks per row'])?.data?.at(-1)?.value;
 const status = (ctx) => drawings(ctx).tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.text ?? '').join(' ').trim();
 
 scenario('CRY-01 auto row size per coin and timeframe', 'crypto: about 20 rows per typical bar (BTC 1m $5, 15s $2, ETH 1m $0.10); 1 tick on futures; manual value wins', async (c) => {
@@ -404,6 +491,46 @@ scenario('CRY-03 rows far too fine: the chart says what to set', "BTC with 'Tick
     c.check(sug >= 50 && sug <= 2000, `status suggests a value between 50 and 2000: "${st}"`);
 });
 
+
+// ═════════════════════════════════════════════ IDC Order Flow (the four tools in one script, built by tools/build_suite.py)
+const SUITE = path.join(TV, 'IDC_OrderFlow.pine');
+const TOOLS = [['HVN Profile', HVN, { 'Max zones on chart': 100 }], ['Imbalance Levels', IMB, { 'Max zones on chart': 250 }],
+    ['Heavy Absorption', HA, { 'Max markers on chart': 50 }], ['Pressure Toolkit', PTK, { 'Max markers on chart (labels)': 100, 'Max lines on chart': 250 }]];
+const switches = (on) => Object.fromEntries(TOOLS.map(([name]) => [name, on.includes(name)]));
+/** Drawings as comparable content (no ids): kind + every plain field. */
+function contents(ctx) {
+    const d = drawings(ctx);
+    const key = (kind, o) => kind + JSON.stringify(Object.fromEntries(Object.entries(o).filter(([k, v]) => !k.startsWith('_') && k !== 'id' && typeof v !== 'object' && typeof v !== 'function').sort()));
+    const all = [...d.boxes.map((o) => key('box', o)), ...d.labels.map((o) => key('label', o)), ...d.lines.map((o) => key('line', o)), ...d.polylines.map((o) => key('polyline', o))];
+    return all.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map());
+}
+function sameContents(c, what, a, b) {
+    const keys = [...new Set([...a.keys(), ...b.keys()])];
+    const bad = keys.filter((k) => a.get(k) !== b.get(k));
+    const n = [...a.values()].reduce((x, y) => x + y, 0);
+    c.check(bad.length === 0, `${what}: ${bad.length} of ${n} drawings differ ${bad.slice(0, 2).map((k) => k.slice(0, 160)).join(' | ')}`);
+    return n;
+}
+const merge = (maps) => maps.reduce((acc, m) => { for (const [k, v] of m) acc.set(k, (acc.get(k) ?? 0) + v); return acc; }, new Map());
+
+scenario('SUITE-01 one switch on = that tool alone', 'IDC Order Flow with one tool switched on draws exactly what the single script draws (same drawing caps)', async (c) => {
+    const m = makeMarket({ seed: 42, segments: [{ bars: 160, tradesPerBar: 170, bigProb: 0.006, revert: { level: 25000, strength: 0.05 } }, { bars: 140, tradesPerBar: 170, buyProb: 0.58 }] });
+    for (const [name, file, caps] of TOOLS) {
+        const one = contents(await runPine(file, m, caps));
+        const suite = contents(await runPine(SUITE, m, switches([name])));
+        c.note(`${name}: ${sameContents(c, name, one, suite)} drawings`);
+    }
+});
+
+scenario('SUITE-02 all switched on = the four tools together', 'all four on: the suite draws the union of the four single scripts, on NQ and on Bitcoin', async (c) => {
+    const nq = makeMarket({ seed: 9, segments: [{ bars: 150, tradesPerBar: 170, bigProb: 0.006, revert: { level: 25000, strength: 0.05 } }, { bars: 150, tradesPerBar: 170, buyProb: 0.42 }] });
+    for (const [label, m, info] of [['NQ', nq, {}], ['BTC', btcMarket(), BTC]]) {
+        const singles = [];
+        for (const [, file, caps] of TOOLS) singles.push(contents(await runPine(file, m, caps, { info })));
+        const suite = contents(await runPine(SUITE, m, switches(TOOLS.map(([name]) => name)), { info }));
+        c.note(`${label}: ${sameContents(c, `${label} all on`, merge(singles), suite)} drawings`);
+    }
+});
 
 const selected = filters.length ? scenarios.filter((s) => filters.some((f) => s.name.toLowerCase().includes(f.toLowerCase()))) : scenarios;
 console.log(`IDCator TradingView scripts (PineTS) - ${selected.length} scenario(s)`);

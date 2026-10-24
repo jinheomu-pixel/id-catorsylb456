@@ -46,6 +46,7 @@ bool   pocSecondaryInput = input.bool(false, "POC line on other zones", group = 
 bool   extendPocInput  = input.bool(true, "Extend POC line (dimmer)", group = G_VIS)
 color  pocColorInput   = input.color(color.rgb(218, 165, 32), "POC color", group = G_VIS)
 bool   showHistInput   = input.bool(false, "Show period histograms", group = G_VIS)
+bool   showLiveZonesInput = input.bool(true, "Show the forming period's nodes (live, dashed)", group = G_VIS)
 bool   showLiveInput   = input.bool(false, "Show live (developing) histogram", group = G_VIS)
 int    histWidthInput  = input.int(35, "Histogram width % of period", minval = 5, maxval = 100, group = G_VIS)
 color  histColorInput  = input.color(color.new(color.rgb(112, 128, 144), 78), "Histogram", group = G_VIS)
@@ -375,6 +376,46 @@ setRight(HZone z, int x) =>
     if not na(z.pocExt)
         z.pocExt.set_x2(x)
 
+//@function The two labels of a node at `mid`: the number in white and " | P%" in the dominant side's color.
+zoneLabels(Cluster c, float mid) =>
+    label ln = na
+    label lp = na
+    if showLabelsInput
+        float sum   = c.buy + c.sell
+        float share = sum > 0 ? c.buy / sum : 0.5
+        bool  buyers = share >= 0.5
+        int   pctV  = math.max(51, int(math.round(100 * (buyers ? share : 1 - share))))
+        string num  = volText(labelValueInput == "POC volume" ? c.pocVol : c.vol)
+        string pctS = sum > 0 ? " | " + str.tostring(pctV) + "%" : ""
+        // two labels, same monospace font
+        ln := label.new(bar_index + 1, mid, num + str.repeat(" ", str.length(pctS)), style = label.style_label_right,
+             color = color.new(color.black, 100), textcolor = labelColorInput, size = labelSizeInput,
+             text_font_family = font.family_monospace, text_formatting = text.format_bold)
+        if sum > 0
+            lp := label.new(bar_index + 1, mid, pctS, style = label.style_label_right, color = color.new(color.black, 100),
+                 textcolor = buyers ? buyPctInput : sellPctInput, size = labelSizeInput, text_font_family = font.family_monospace,
+                 text_formatting = text.format_bold)
+    [ln, lp]
+
+//@function A copy of a period (its volume maps are copied too).
+copyPeriod(Period p) =>
+    Period.new(p.key, p.startBar, p.endBar, p.lowTick, p.highTick, p.vol.copy(), p.buy.copy(), p.sell.copy())
+
+//@function The forming period's nodes so far: dashed outlines, drawn again on every update until the period closes.
+liveZones(Period p) =>
+    [clusters, rt] = analyze(p)
+    int x0 = math.max(p.startBar, bar_index - 4999)
+    int i = 0
+    for c in clusters
+        color base = i == 0 ? primaryInput : secondaryInput
+        i += 1
+        float bottom = (p.lowTick + c.first * rt) * tick
+        float top    = math.min(p.lowTick + (c.last + 1) * rt, p.highTick + fpTicks) * tick
+        box.new(x0, top, bar_index + 1, bottom, border_color = color.new(base, 25), border_style = line.style_dashed,
+             bgcolor = color.new(base, 100 - zoneOpacInput))
+        [ln, lp] = zoneLabels(c, (bottom + top) / 2)
+    i
+
 //@function Turns a finished period into zones (and an optional histogram).
 finalize(Period p) =>
     [clusters, rt] = analyze(p)
@@ -390,23 +431,7 @@ finalize(Period p) =>
         float mid    = (bottom + top) / 2
         box b = box.new(x0, top, bar_index + 1, bottom, border_color = color.new(color.black, 100),
              bgcolor = color.new(primary ? primaryInput : secondaryInput, 100 - zoneOpacInput))
-        label ln = na
-        label lp = na
-        if showLabelsInput
-            float sum   = c.buy + c.sell
-            float share = sum > 0 ? c.buy / sum : 0.5
-            bool  buyers = share >= 0.5
-            int   pctV  = math.max(51, int(math.round(100 * (buyers ? share : 1 - share))))
-            string num  = volText(labelValueInput == "POC volume" ? c.pocVol : c.vol)
-            string pctS = sum > 0 ? " | " + str.tostring(pctV) + "%" : ""
-            // two labels, same monospace font: the number in white, " | P%" in the dominant side's color
-            ln := label.new(bar_index + 1, mid, num + str.repeat(" ", str.length(pctS)), style = label.style_label_right,
-                 color = color.new(color.black, 100), textcolor = labelColorInput, size = labelSizeInput,
-                 text_font_family = font.family_monospace, text_formatting = text.format_bold)
-            if sum > 0
-                lp := label.new(bar_index + 1, mid, pctS, style = label.style_label_right, color = color.new(color.black, 100),
-                     textcolor = buyers ? buyPctInput : sellPctInput, size = labelSizeInput, text_font_family = font.family_monospace,
-                     text_formatting = text.format_bold)
+        [ln, lp] = zoneLabels(c, mid)
         line l1 = na
         line l2 = na
         if showPocInput and (primary or pocSecondaryInput)
@@ -492,7 +517,12 @@ rowHint(string name, int used, bool fine) =>
     not anyFp and typRange / (used * syminfo.mintick) > 1000 ? name + ": too many price rows per bar for the footprint - set 'Ticks per row' to " + str.tostring(sug) :
          anyFp and fine and (used >= sug * 4 or sug >= used * 4) ? name + ": about " + str.tostring(sug) + " ticks per row suits this chart (now " + str.tostring(used) + ", setting 'Ticks per row')" : ""
 
-// ───────────────────────────────────────────── developing profile
+// ───────────────────────────────────────────── forming period: its nodes so far (live), and the developing histogram
+if showLiveZonesInput and barstate.islast and not barstate.isconfirmed and not tfTooHigh and not na(cur)
+    Period livePer = copyPeriod(cur)
+    addRows(livePer, fp)
+    if livePer.vol.size() > 0
+        liveZones(livePer)
 if barstate.islast and showLiveInput and not tfTooHigh
     if not na(livePoly)
         livePoly.delete()
