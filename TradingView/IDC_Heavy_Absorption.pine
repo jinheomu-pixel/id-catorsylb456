@@ -8,7 +8,7 @@
 // unit is the aggressive volume per price per bar (footprint cell) rather than a single print.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, scale = scale.right, max_labels_count = 500)
+indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, max_labels_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"

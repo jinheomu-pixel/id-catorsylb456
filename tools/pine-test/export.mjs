@@ -63,12 +63,13 @@ gz('lite60.candles.csv.gz', candlesCsv(m.candles));
 gz('lite60.intrabars15.csv.gz', candlesCsv(candlesAt(m, 15)));
 const lite = { tick: m.tick, barSec: 60, bars: m.candles.length, runs: {} };
 // (the suite's drawing caps apply: the Python tests check that everything Lite drew is in Python's result)
-const allOn = { 'HVN Profile': true, 'Imbalance Levels': true, 'Heavy Absorption': true, 'Pressure Toolkit': true };
+const allOn = { 'HVN Profile': true, 'Imbalance Levels': true, 'Heavy Absorption': true, 'Pressure Toolkit': true, 'Ticks per row (0 = auto)': 1 };
 // Lite's clean defaults hide touched zones; the comparison keeps them (and the suite's caps), for more to compare
 const liteSrc = fs.readFileSync(path.join(TV, 'IDC_OrderFlow_Lite.pine'), 'utf8')
     .replaceAll('input.bool(false, "Keep touched zones"', 'input.bool(true, "Keep touched zones"')
-    .replace('input.int(60, "Max zones on chart"', 'input.int(250, "Max zones on chart"')
-    .replace('input.int(40, "Max zones on chart"', 'input.int(100, "Max zones on chart"');
+    .replace('input.int(20, "Max zones on chart"', 'input.int(250, "Max zones on chart"')
+    .replace('input.int(12, "Max zones on chart"', 'input.int(100, "Max zones on chart"')
+    .replace('input.int(1, "Max clusters per period"', 'input.int(3, "Max clusters per period"');
 const liteFile = path.join(here, 'out', 'lite-keep-touched.pine');
 fs.mkdirSync(path.dirname(liteFile), { recursive: true });
 fs.writeFileSync(liteFile, liteSrc);

@@ -33,6 +33,8 @@ FundedNext Futures resmi mendukung TradingView sebagai platform trading. Jadi ch
 
 ## Cara pasang
 
+> **Kalau gambar indikator tidak ikut bergeser bersama candle** (ada skala harga kedua di kanan, atau zona berada jauh dari candle): TradingView menyimpan skala dari versi lama script. Hapus indikatornya dari chart, lalu tambahkan lagi dari *Indicators → My scripts*. Bisa juga lewat menu **⋯ → Pin to scale** di nama indikator, lalu pilih skala yang sama dengan candle.
+
 1. Buka chart di TradingView, klik **Pine Editor** di bawah.
 2. Buka menu nama script di kiri atas Pine Editor, pilih **Create new → Indicator**, lalu hapus semua isinya.
 3. Buka `IDC_OrderFlow.pine` (Premium/Ultimate) atau `IDC_OrderFlow_Lite.pine` (paket lain), salin **semua** isinya, lalu tempel di Pine Editor.
@@ -85,7 +87,7 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
 
 **Chart tetap bersih di semua timeframe** (default Lite):
 - Zona Imbalance dan HVN yang sudah disentuh harga **dihapus**. Yang tersisa hanya zona yang masih berlaku. Untuk menampilkannya lagi, nyalakan *Keep touched zones*.
-- Paling banyak 60 zona Imbalance, 40 zona HVN, dan 2 node HVN per profil.
+- Hanya zona terbaru yang tampil: paling banyak 20 zona Imbalance dan 12 zona HVN, dengan satu node (yang terbesar) per profil HVN. Semuanya bisa dinaikkan di setting (*Max zones on chart*, *Max clusters per period*).
 - **Panjang profil HVN otomatis** mengikuti timeframe chart, sekitar 15–25 bar per profil:
 
   | Chart | Profil |
@@ -99,7 +101,7 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
   | 1 hari | 1 bulan |
 
   Matikan *Auto profile timeframe* untuk memilih sendiri.
-- **Ukuran baris otomatis dari range harian** simbol itu sendiri, sekitar 20 baris per candle biasa. Ini berlaku untuk semua simbol (emas, indeks, forex, crypto) dan semua timeframe. Hari pertama di chart memakai ukuran bawaan.
+- **Ukuran baris otomatis dari candle chart itu sendiri**, sekitar 1/20 dari range rata-rata 100 candle terakhir. Ukuran ini diperbarui sekali sehari, jadi sama sepanjang hari. Ini berlaku untuk semua simbol (emas, indeks, forex, crypto) dan semua timeframe. Sebelum ada 100 candle, dipakai ukuran bawaan.
 
 **Setting *Intrabars*** (grup *Data (Lite)*): candle yang lebih kecil di dalam setiap bar memberi perkiraan yang lebih halus.
 - *Auto*: 1 menit untuk chart sampai 1 jam, 5 menit sampai 4 jam, dan seterusnya. Di chart 1 menit ke bawah dipakai candle chart itu sendiri.
@@ -153,11 +155,11 @@ Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Sc
 - tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan ukuran baris di kelima file dihitung di level atas script hanya dengan fungsi bawaan. Fungsi buatan sendiri tidak dipakai di situ, karena Pine menganggap parameternya *series*. Bagian itu juga tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
 - live: kotak/node/garis putus-putus selama bar berjalan yang menjadi permanen saat close, dan alert live Heavy Absorption;
 - IDC Order Flow: dengan satu alat menyala hasilnya sama persis dengan file terpisahnya. Dengan semua menyala, hasilnya sama dengan gabungan keempatnya (NQ dan Bitcoin). Skenario realtime juga dijalankan pada IDC Order Flow (`--suite`).
-- semua script tanpa plot dan terpasang di skala harga kanan, supaya gambar selalu menempel di candle;
+- semua script tanpa plot dan tanpa pengaturan skala sendiri, supaya gambarnya memakai skala harga candle dan ikut bergeser bersamanya;
 - IDC Order Flow Lite:
   - tidak memakai `request.footprint()` dan menggambar keempat alat tanpa data footprint;
-  - ukuran baris dari range harian, juga di simbol tanpa base currency;
-  - default bersih: hanya zona yang belum tersentuh, jumlah zona dibatasi, 2 node per profil;
+  - ukuran baris dari candle chart (1/20 range rata-rata), diperbarui sekali sehari, juga di simbol tanpa base currency;
+  - default bersih: hanya zona yang belum tersentuh, paling banyak 20 zona Imbalance dan 12 zona HVN, satu node per profil;
   - perkiraan satu candle naik kuat menghasilkan zona beli tepat di badannya;
   - intrabar membuat zona HVN lebih dekat ke footprint asli;
   - realtime sama dengan history.

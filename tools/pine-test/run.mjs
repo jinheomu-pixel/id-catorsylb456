@@ -471,11 +471,11 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals:
     c.eq(500, ticksUsed(hvn), 'HVN BTC/USDT 1m: footprint ticks per row');
 });
 
-scenario('QUAL-02 drawings on the price scale', 'no script plots a value (a hidden plot of 1 made TradingView put IDC Lite on a scale of its own, so its zones did not follow the candles) and every script is pinned to the right price scale', async (c) => {
+scenario('QUAL-02 drawings on the price scale of the candles', 'no script plots a value (a hidden plot of 1 put IDC Lite on a scale of its own) and none names a scale (scale = scale.right gave it a new right scale "B"): an overlay script then shares the candles\' scale and its zones move with them', async (c) => {
     for (const f of ['IDC_Imbalance_Levels.pine', 'IDC_HVN_Profile.pine', 'IDC_Heavy_Absorption.pine', 'IDC_Pressure_Toolkit.pine', 'IDC_OrderFlow.pine', 'IDC_OrderFlow_Lite.pine']) {
         const code = fs.readFileSync(path.join(TV, f), 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
         c.check(!/(^|[^\w.])(plot|plotshape|plotchar|plotcandle|plotbar|hline|fill|bgcolor|barcolor)\s*\(/m.test(code), `${f}: no plots`);
-        c.check(/indicator\([^)]*scale = scale\.right/.test(code), `${f}: scale = scale.right`);
+        c.check(/indicator\([^)]*overlay = true/.test(code) && !/indicator\([^)]*scale\s*=/.test(code), `${f}: overlay, no scale argument`);
     }
 });
 
@@ -576,13 +576,14 @@ function nq60() {
         { bars: 10, tradesPerBar: 680, bigProb: 0.005, revert: d === 0.5 ? { level: 25000 + k * 4, strength: 0.05 } : null, buyProb: d, liftProb: 0.26 },
         { bars: 10, tradesPerBar: 680, bigProb: 0.005, buyProb: d, liftProb: 0.24 }]) });
 }
-/** Lite with touched zones kept and the suite's zone caps (its clean defaults hide touched zones): for comparisons
+/** Lite with touched zones kept, the suite's zone caps and 3 nodes per profile (its clear defaults hide touched zones): for comparisons
  * with the real footprint, which keeps them. */
 function liteKeepTouched() {
     const f = path.join(OUT, 'lite-keep-touched.pine');
     fs.mkdirSync(OUT, { recursive: true });
     fs.writeFileSync(f, fs.readFileSync(LITE, 'utf8').replaceAll('input.bool(false, "Keep touched zones"', 'input.bool(true, "Keep touched zones"')
-        .replace('input.int(60, "Max zones on chart"', 'input.int(250, "Max zones on chart"').replace('input.int(40, "Max zones on chart"', 'input.int(100, "Max zones on chart"'));
+        .replace('input.int(20, "Max zones on chart"', 'input.int(250, "Max zones on chart"').replace('input.int(12, "Max zones on chart"', 'input.int(100, "Max zones on chart"')
+        .replace('input.int(1, "Max clusters per period"', 'input.int(3, "Max clusters per period"'));
     return f;
 }
 /** HVN zones (bottom, top) of a run: its boxes without text (imbalance zones carry their label inside). */
@@ -600,7 +601,7 @@ scenario('LITE-01 runs on every plan', 'IDC Order Flow Lite has no request.footp
     const st = status(ctx);
     c.check(!/no volume|no footprint/.test(st), `status: "${st}"`);
     c.check(hvnBoxes(ctx).length >= 2, `HVN zones: ${hvnBoxes(ctx).length}`);
-    c.check(d.boxes.filter((b) => /^\d+(\.\d+)?x \|/.test(String(b.text))).length >= 5, 'imbalance zones');
+    c.check(d.boxes.filter((b) => /^\d+(\.\d+)?x \|/.test(String(b.text))).length >= 1, 'imbalance zones');
     c.check(d.labels.filter((l) => l.text === '●').length >= 2, 'heavy absorption circles / pressure bubbles');
     c.note(`${d.boxes.length} boxes, ${d.labels.length} labels, ${d.lines.length} lines; status "${st}"`);
 });
@@ -621,7 +622,7 @@ scenario('LITE-02 estimate of one strong up bar', 'chart bars only: open 25000, 
 scenario('LITE-03 intrabars sharpen the estimate', '1-minute chart: Lite with 15-second intrabars finds more of the real footprint HVN zones than Lite on chart bars alone (5-minute profiles, touched zones kept on both sides)', async (c) => {
     const m = nq60();
     // 5-minute profiles (more of them to compare than the automatic 15 minutes on a 1-minute chart)
-    const five = { 'Auto profile timeframe': false, 'Profile timeframe': '5' };
+    const five = { 'Auto profile timeframe': false, 'Profile timeframe': '5', 'Ticks per row (0 = auto)': 1 };
     const real = hvnBoxes(await runPine(SUITE, m, { ...switches(['HVN Profile']), ...five }));
     const share = {};
     for (const ib of ['Chart bars only', '15 seconds']) {
@@ -650,20 +651,29 @@ scenario('LITE-04 realtime = history', "Lite replayed tick by tick over the last
     } finally { live.stop(); }
 });
 
-scenario('LITE-05 row size from the daily range', "Lite on an unknown symbol (no base currency, 5-minute bars, tick 0.001): from day 2 the rows are about 1/20 of a typical bar, from the previous day's range", async (c) => {
-    const m = scaleMarket(makeMarket({ seed: 4, barSec: 300, segments: [{ bars: 288, tradesPerBar: 40 }, { bars: 60, tradesPerBar: 40 }] }), { price: 4000, step: 0.04, tick: 0.001, sizeScale: 1, jitter: 40 });
-    const info = { type: 'cfd', basecurrency: '', currency: 'USD', ticker: 'ABCUSD', tickerid: 'BROKER:ABCUSD', prefix: 'BROKER' };
-    const ctx = await runPine(LITE, m, { 'HVN Profile': false, 'Imbalance Levels': true, 'Heavy Absorption': false, 'Pressure Toolkit': false }, { info });
-    const day = candlesAt(m, 86400)[0];
-    const raw = (day.high - day.low) * Math.sqrt(300 / 86400) / 20;
+/** Ticks per row of Lite's automatic size at bar `i`: 1/20 of the average range of the last 100 bars, rounded. */
+function liteRowAt(m, i) {
+    const cs = m.candles.slice(i - 99, i + 1);
+    const raw = cs.reduce((a, x) => a + x.high - x.low, 0) / cs.length / 20;
     const mag = 10 ** Math.floor(Math.log10(raw));
     const f = raw / mag;
-    const want = Math.max(1, Math.round(((f < 1.5 ? 1 : f < 2.25 ? 2 : f < 3.5 ? 2.5 : f < 7.5 ? 5 : 10) * mag) / 0.001));
-    c.check(want > 1, `expected rows of ${want} ticks`);
-    c.eq(want, ticksUsed(ctx), `ticks per row on day 2 (day 1 range ${(day.high - day.low).toFixed(3)})`);
+    return Math.max(1, Math.round(((f < 1.5 ? 1 : f < 2.25 ? 2 : f < 3.5 ? 2.5 : f < 7.5 ? 5 : 10) * mag) / m.tick));
+}
+
+scenario('LITE-05 row size from the chart, set once a day', "Lite on an unknown symbol (no base currency, 5-minute bars, tick 0.001): rows of about 1/20 of the chart's typical bar (last 100 bars), updated at each day change: after a quiet day the rows get smaller", async (c) => {
+    const midnight = Date.UTC(2026, 2, 3, 0, 0, 0);
+    // 100 lively bars before midnight, a quiet day, the first bars of the next day
+    const m = scaleMarket(makeMarket({ seed: 4, start: midnight - 100 * 300000, barSec: 300, segments: [{ bars: 100, tradesPerBar: 80, liftProb: 0.6 }, { bars: 300, tradesPerBar: 20, liftProb: 0.05 }] }),
+        { price: 4000, step: 0.04, tick: 0.001, sizeScale: 1, jitter: 40 });
+    const info = { type: 'cfd', basecurrency: '', currency: 'USD', ticker: 'ABCUSD', tickerid: 'BROKER:ABCUSD', prefix: 'BROKER', timezone: 'Etc/UTC' };
+    const ctx = await runPine(LITE, m, { 'HVN Profile': false, 'Imbalance Levels': true, 'Heavy Absorption': false, 'Pressure Toolkit': false }, { info });
+    const day3 = m.candles.findIndex((x) => x.openTime >= midnight + 86400000);
+    const first = liteRowAt(m, 99), want = liteRowAt(m, day3);
+    c.check(want < first, `the quiet day gives smaller rows (${first} -> ${want} ticks)`);
+    c.eq(want, ticksUsed(ctx), 'ticks per row on the last day = from the 100 bars up to its first bar');
 });
 
-scenario('LITE-06 clean chart on every timeframe', 'Lite defaults: touched imbalance and HVN zones are removed, at most 60 imbalance and 40 HVN zones, 2 nodes per profile', async (c) => {
+scenario('LITE-06 clear chart on every timeframe', 'Lite defaults: touched imbalance and HVN zones are removed, at most 20 imbalance and 12 HVN zones, one node per profile', async (c) => {
     const m = scaleMarket(nq60(), { price: 4000, step: 0.04, tick: 0.001, sizeScale: 1, jitter: 40 });
     const info = { type: 'cfd', basecurrency: '', currency: 'USD', ticker: 'XAUUSD', tickerid: 'OANDA:XAUUSD', prefix: 'OANDA' };
     const ctx = await runPine(LITE, m, {}, { info });
@@ -671,12 +681,12 @@ scenario('LITE-06 clean chart on every timeframe', 'Lite defaults: touched imbal
     const boxes = solid(drawings(ctx).boxes);
     const imb = boxes.filter((b) => String(b.text ?? '').trim());
     const hvn = boxes.filter((b) => !String(b.text ?? '').trim());
-    c.check(imb.length > 0 && imb.length <= 60, `imbalance zones on the chart: ${imb.length}`);
-    c.check(hvn.length > 0 && hvn.length <= 40, `HVN zones on the chart: ${hvn.length}`);
+    c.check(imb.length > 0 && imb.length <= 20, `imbalance zones on the chart: ${imb.length}`);
+    c.check(hvn.length > 0 && hvn.length <= 12, `HVN zones on the chart: ${hvn.length}`);
     c.check(boxes.every((b) => b.right === last + 1), `only untouched zones (reaching the last bar): ${boxes.filter((b) => b.right !== last + 1).length} touched left`);
     const perPeriod = hvn.reduce((acc, b) => acc.set(b.left, (acc.get(b.left) ?? 0) + 1), new Map());
-    c.check(Math.max(...perPeriod.values()) <= 2, 'at most 2 HVN nodes per profile');
-    c.eq(100, ticksUsed(ctx), 'gold 1m: rows of $0.10 (100 ticks)');
+    c.check(Math.max(...perPeriod.values()) <= 1, 'one HVN node per profile');
+    c.eq(liteRowAt(m, 99), ticksUsed(ctx), `gold 1m: rows of 1/20 of a typical bar (${liteRowAt(m, 99)} ticks)`);
     c.note(`${imb.length} imbalance zones, ${hvn.length} HVN zones`);
 });
 

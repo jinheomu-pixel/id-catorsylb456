@@ -7,7 +7,7 @@
 // extended right until price returns. Psychological levels: round numbers scaled to the instrument.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, scale = scale.right, max_labels_count = 500, max_lines_count = 500)
+indicator("IDC Pressure Toolkit", "IDC Pressure", overlay = true, max_labels_count = 500, max_lines_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_GEN = "General"

@@ -6,7 +6,7 @@
 // it, then it stops at that bar. Label: strongest ratio | stack volume ("6.7x | 350"). Darker = stronger.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Imbalance Levels", "IDC Imbalance", overlay = true, scale = scale.right, max_boxes_count = 500)
+indicator("IDC Imbalance Levels", "IDC Imbalance", overlay = true, max_boxes_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"

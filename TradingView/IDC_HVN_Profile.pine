@@ -7,7 +7,7 @@
 // P = share of the dominant side (green = buyers, red = sellers). Zones extend until price trades back into them.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC HVN Profile", "IDC HVN", overlay = true, scale = scale.right, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
+indicator("IDC HVN Profile", "IDC HVN", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
      max_polylines_count = 100, max_bars_back = 5000)
 
 // ───────────────────────────────────────────── inputs
