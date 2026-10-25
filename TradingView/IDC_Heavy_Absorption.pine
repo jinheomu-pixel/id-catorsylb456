@@ -8,7 +8,7 @@
 // unit is the aggressive volume per price per bar (footprint cell) rather than a single print.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, max_labels_count = 500)
+indicator("IDC Heavy Absorption", "IDC Heavy Abs", overlay = true, scale = scale.right, max_labels_count = 500)
 
 // ───────────────────────────────────────────── inputs
 G_DET = "Detection"
@@ -51,9 +51,13 @@ string rowCoin      = syminfo.basecurrency
 string rowQuote     = syminfo.currency
 bool   rowInDollars = rowQuote == "USD" or rowQuote == "USDT" or rowQuote == "USDC" or rowQuote == "FDUSD" or rowQuote == "BUSD" or
      rowQuote == "USDE" or rowQuote == "DAI" or rowQuote == "TUSD" or rowQuote == "PYUSD" or rowQuote == "USD1" or rowQuote == "EUR" or rowQuote == "GBP"
+string rowTicker    = syminfo.ticker
 //@variable Rough dollar price of a coin or a spot metal, 0 when it is not listed. Only the order of magnitude matters:
-// a price off by 2x moves the row size by one step.
-float  rowListedPx  = not rowInDollars ? 0.0 :
+// a price off by 2x moves the row size by one step. Spot metals are also known by their ticker (OANDA:XAUUSD and other
+// broker symbols may carry no base currency).
+float  rowListedPx  = rowTicker == "XAUUSD" or rowTicker == "GOLD" ? 4000.0 : rowTicker == "XAGUSD" or rowTicker == "SILVER" ? 50.0 :
+     rowTicker == "XPTUSD" or rowTicker == "PLATINUM" ? 1500.0 : rowTicker == "XPDUSD" or rowTicker == "PALLADIUM" ? 1200.0 :
+     not rowInDollars ? 0.0 :
      rowCoin == "BTC" or rowCoin == "WBTC" ? 100000.0 :
      rowCoin == "ETH" or rowCoin == "WETH" ? 3500.0 :
      rowCoin == "BNB" ? 700.0 :
@@ -107,7 +111,6 @@ int    autoRow      = rowRefPx <= 0 ? 1 :
 
 int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow
 footprint fp = request.footprint(rowTicks)
-plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
 
 type Marker
@@ -270,4 +273,5 @@ if barstate.islast
     string hint = rowHint("IDC Heavy Absorption", rowTicks, true)
     string msg = not anyFp ? (str.length(hint) > 0 ? hint : "IDC Heavy Absorption: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)") :
          not ready ? "IDC Heavy Absorption: collecting statistics (" + str.tostring(totN) + "/" + str.tostring(minSamplesInput) + ")" : hint
-    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)
+    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9,
+         tooltip = "Ticks per row: " + str.tostring(rowTicks))

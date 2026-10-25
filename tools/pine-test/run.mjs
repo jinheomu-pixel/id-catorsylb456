@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser, ALIASES, resolveScript } from './harness.mjs';
+import { runPine, drawings, makeMarket, scaleMarket, renderSvg, renderPng, closeBrowser, ALIASES, resolveScript, candlesAt } from './harness.mjs';
 import { Tape, Live, barStart } from './tape.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -441,8 +441,10 @@ function btcMarket(barSec = 60) {
     }
     return scaleMarket(makeMarket({ seed: 7, barSec, segments: segs }));
 }
-// (IDC Order Flow has one shared 'Ticks per row' for all tools)
-const ticksUsed = (ctx, title = 'Ticks per row') => (ctx.plots?.[title] ?? ctx.plots?.['Ticks per row'])?.data?.at(-1)?.value;
+// ticks per row in use: the tooltip of the status cell (no plot: a plotted value of 1 would move the drawings to a scale
+// of their own in TradingView)
+const ticksUsed = (ctx) => Number((drawings(ctx).tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.tooltip ?? '').join(' ')
+    .match(/ticks per row: (\d+)/i) ?? [])[1]);
 const status = (ctx) => drawings(ctx).tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.text ?? '').join(' ').trim();
 
 scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals: about 20 rows per typical bar (BTC 1m $5, 15s $2, ETH 1m $0.10, XAUUSD 1m $0.10); 1 tick on futures and forex; manual value wins', async (c) => {
@@ -457,6 +459,7 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals:
         ['ETH/BTC 1m (not in dollars)', nq60, { ...BTC, basecurrency: 'ETH', currency: 'BTC', mintick: 0.00001 }, {}, 1],
         ['NQ futures 15s', nq15, {}, {}, 1],
         ['OANDA:XAUUSD 1m (spot gold, tick 0.001): $0.10 rows', nq60, { type: 'cfd', basecurrency: 'XAU', currency: 'USD', mintick: 0.001, ticker: 'XAUUSD', tickerid: 'OANDA:XAUUSD', prefix: 'OANDA' }, {}, 100],
+        ['OANDA:XAUUSD without a base currency: known by its ticker', nq60, { type: 'commodity', basecurrency: '', currency: 'USD', mintick: 0.001, ticker: 'XAUUSD', tickerid: 'OANDA:XAUUSD', prefix: 'OANDA' }, {}, 100],
         ['EURUSD 1m (forex)', nq60, { type: 'forex', basecurrency: 'EUR', currency: 'USD', mintick: 0.00001, ticker: 'EURUSD', tickerid: 'OANDA:EURUSD', prefix: 'OANDA' }, {}, 1],
         ['BTC/USDT 1m, manual 7', nq60, BTC, { 'Ticks per row (0 = auto)': 7 }, 7],
     ];
@@ -465,7 +468,15 @@ scenario('CRY-01 auto row size per coin and timeframe', 'crypto and spot metals:
         c.eq(want, ticksUsed(ctx), `${name}: ticks per row`);
     }
     const hvn = await runPine(HVN, nq60, {}, { info: BTC });
-    c.eq(500, ticksUsed(hvn, 'Footprint ticks per row'), 'HVN BTC/USDT 1m: footprint ticks per row');
+    c.eq(500, ticksUsed(hvn), 'HVN BTC/USDT 1m: footprint ticks per row');
+});
+
+scenario('QUAL-02 drawings on the price scale', 'no script plots a value (a hidden plot of 1 made TradingView put IDC Lite on a scale of its own, so its zones did not follow the candles) and every script is pinned to the right price scale', async (c) => {
+    for (const f of ['IDC_Imbalance_Levels.pine', 'IDC_HVN_Profile.pine', 'IDC_Heavy_Absorption.pine', 'IDC_Pressure_Toolkit.pine', 'IDC_OrderFlow.pine', 'IDC_OrderFlow_Lite.pine']) {
+        const code = fs.readFileSync(path.join(TV, f), 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+        c.check(!/(^|[^\w.])(plot|plotshape|plotchar|plotcandle|plotbar|hline|fill|bgcolor|barcolor)\s*\(/m.test(code), `${f}: no plots`);
+        c.check(/indicator\([^)]*scale = scale\.right/.test(code), `${f}: scale = scale.right`);
+    }
 });
 
 scenario('QUAL-01 footprint row size is "simple"', 'TradingView compiles request.footprint() only with a "simple int" row size: it is computed at the top level with built-ins only (Pine treats the parameters of user-defined functions as "series"), and no switch / if / loop / := / var, history or bar data (PineTS does not check qualifiers)', async (c) => {
@@ -565,6 +576,15 @@ function nq60() {
         { bars: 10, tradesPerBar: 680, bigProb: 0.005, revert: d === 0.5 ? { level: 25000 + k * 4, strength: 0.05 } : null, buyProb: d, liftProb: 0.26 },
         { bars: 10, tradesPerBar: 680, bigProb: 0.005, buyProb: d, liftProb: 0.24 }]) });
 }
+/** Lite with touched zones kept and the suite's zone caps (its clean defaults hide touched zones): for comparisons
+ * with the real footprint, which keeps them. */
+function liteKeepTouched() {
+    const f = path.join(OUT, 'lite-keep-touched.pine');
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.writeFileSync(f, fs.readFileSync(LITE, 'utf8').replaceAll('input.bool(false, "Keep touched zones"', 'input.bool(true, "Keep touched zones"')
+        .replace('input.int(60, "Max zones on chart"', 'input.int(250, "Max zones on chart"').replace('input.int(40, "Max zones on chart"', 'input.int(100, "Max zones on chart"'));
+    return f;
+}
 /** HVN zones (bottom, top) of a run: its boxes without text (imbalance zones carry their label inside). */
 const hvnBoxes = (ctx) => drawings(ctx).boxes.filter((b) => !String(b.text ?? '').trim()).map((b) => [Math.min(b.top, b.bottom), Math.max(b.top, b.bottom)]);
 /** Share of `want` zones that overlap a zone of `got`. */
@@ -579,7 +599,7 @@ scenario('LITE-01 runs on every plan', 'IDC Order Flow Lite has no request.footp
     const d = drawings(ctx);
     const st = status(ctx);
     c.check(!/no volume|no footprint/.test(st), `status: "${st}"`);
-    c.check(hvnBoxes(ctx).length >= 5, `HVN zones: ${hvnBoxes(ctx).length}`);
+    c.check(hvnBoxes(ctx).length >= 2, `HVN zones: ${hvnBoxes(ctx).length}`);
     c.check(d.boxes.filter((b) => /^\d+(\.\d+)?x \|/.test(String(b.text))).length >= 5, 'imbalance zones');
     c.check(d.labels.filter((l) => l.text === '●').length >= 2, 'heavy absorption circles / pressure bubbles');
     c.note(`${d.boxes.length} boxes, ${d.labels.length} labels, ${d.lines.length} lines; status "${st}"`);
@@ -598,12 +618,14 @@ scenario('LITE-02 estimate of one strong up bar', 'chart bars only: open 25000, 
     c.eq(0, drawings(ctx).boxes.filter((b) => b.left !== 5).length, 'no zone from the quiet bars');
 });
 
-scenario('LITE-03 intrabars sharpen the estimate', '1-minute chart: Lite with 15-second intrabars finds more of the real footprint HVN zones than Lite on chart bars alone', async (c) => {
+scenario('LITE-03 intrabars sharpen the estimate', '1-minute chart: Lite with 15-second intrabars finds more of the real footprint HVN zones than Lite on chart bars alone (5-minute profiles, touched zones kept on both sides)', async (c) => {
     const m = nq60();
-    const real = hvnBoxes(await runPine(SUITE, m, switches(['HVN Profile'])));
+    // 5-minute profiles (more of them to compare than the automatic 15 minutes on a 1-minute chart)
+    const five = { 'Auto profile timeframe': false, 'Profile timeframe': '5' };
+    const real = hvnBoxes(await runPine(SUITE, m, { ...switches(['HVN Profile']), ...five }));
     const share = {};
     for (const ib of ['Chart bars only', '15 seconds']) {
-        const lite = hvnBoxes(await runPine(LITE, m, { ...switches(['HVN Profile']), Intrabars: ib }));
+        const lite = hvnBoxes(await runPine(liteKeepTouched(), m, { ...switches(['HVN Profile']), ...five, Intrabars: ib }));
         share[ib] = overlapShare(real, lite);
         c.note(`${ib}: ${lite.length} zones, ${(share[ib] * 100).toFixed(0)} % of the ${real.length} real zones overlapped`);
     }
@@ -626,6 +648,43 @@ scenario('LITE-04 realtime = history', "Lite replayed tick by tick over the last
         const hist = await runPine(LITE, live.data(), inputs);
         c.note(`${sameContents(c, 'live vs history', contents(live.ctx), contents(hist))} drawings`);
     } finally { live.stop(); }
+});
+
+scenario('LITE-05 row size from the daily range', "Lite on an unknown symbol (no base currency, 5-minute bars, tick 0.001): from day 2 the rows are about 1/20 of a typical bar, from the previous day's range", async (c) => {
+    const m = scaleMarket(makeMarket({ seed: 4, barSec: 300, segments: [{ bars: 288, tradesPerBar: 40 }, { bars: 60, tradesPerBar: 40 }] }), { price: 4000, step: 0.04, tick: 0.001, sizeScale: 1, jitter: 40 });
+    const info = { type: 'cfd', basecurrency: '', currency: 'USD', ticker: 'ABCUSD', tickerid: 'BROKER:ABCUSD', prefix: 'BROKER' };
+    const ctx = await runPine(LITE, m, { 'HVN Profile': false, 'Imbalance Levels': true, 'Heavy Absorption': false, 'Pressure Toolkit': false }, { info });
+    const day = candlesAt(m, 86400)[0];
+    const raw = (day.high - day.low) * Math.sqrt(300 / 86400) / 20;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const f = raw / mag;
+    const want = Math.max(1, Math.round(((f < 1.5 ? 1 : f < 2.25 ? 2 : f < 3.5 ? 2.5 : f < 7.5 ? 5 : 10) * mag) / 0.001));
+    c.check(want > 1, `expected rows of ${want} ticks`);
+    c.eq(want, ticksUsed(ctx), `ticks per row on day 2 (day 1 range ${(day.high - day.low).toFixed(3)})`);
+});
+
+scenario('LITE-06 clean chart on every timeframe', 'Lite defaults: touched imbalance and HVN zones are removed, at most 60 imbalance and 40 HVN zones, 2 nodes per profile', async (c) => {
+    const m = scaleMarket(nq60(), { price: 4000, step: 0.04, tick: 0.001, sizeScale: 1, jitter: 40 });
+    const info = { type: 'cfd', basecurrency: '', currency: 'USD', ticker: 'XAUUSD', tickerid: 'OANDA:XAUUSD', prefix: 'OANDA' };
+    const ctx = await runPine(LITE, m, {}, { info });
+    const last = m.candles.length - 1;
+    const boxes = solid(drawings(ctx).boxes);
+    const imb = boxes.filter((b) => String(b.text ?? '').trim());
+    const hvn = boxes.filter((b) => !String(b.text ?? '').trim());
+    c.check(imb.length > 0 && imb.length <= 60, `imbalance zones on the chart: ${imb.length}`);
+    c.check(hvn.length > 0 && hvn.length <= 40, `HVN zones on the chart: ${hvn.length}`);
+    c.check(boxes.every((b) => b.right === last + 1), `only untouched zones (reaching the last bar): ${boxes.filter((b) => b.right !== last + 1).length} touched left`);
+    const perPeriod = hvn.reduce((acc, b) => acc.set(b.left, (acc.get(b.left) ?? 0) + 1), new Map());
+    c.check(Math.max(...perPeriod.values()) <= 2, 'at most 2 HVN nodes per profile');
+    c.eq(100, ticksUsed(ctx), 'gold 1m: rows of $0.10 (100 ticks)');
+    c.note(`${imb.length} imbalance zones, ${hvn.length} HVN zones`);
+});
+
+scenario('HVN-03 automatic profile timeframe', 'about 15-25 bars per profile on every chart timeframe: 1-minute chart -> 15-minute profiles (15-second chart -> 5 minutes, as in HVN-01)', async (c) => {
+    const ctx = await runPine(HVN, nq60(), {});
+    const starts = [...new Set(drawings(ctx).boxes.map((b) => b.left))].sort((a, b) => a - b);
+    c.check(starts.length >= 4, `profiles with zones: ${starts.length}`);
+    c.check(starts.every((x) => x % 15 === 0), `profiles start every 15 bars: ${starts.slice(0, 8).join(', ')}`);
 });
 
 const selected = filters.length ? scenarios.filter((s) => filters.some((f) => s.name.toLowerCase().includes(f.toLowerCase()))) : scenarios;

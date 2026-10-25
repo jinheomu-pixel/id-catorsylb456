@@ -32,7 +32,8 @@ def main(argv=None) -> int:
                    help="price tick (e.g. 0.25 NQ, 0.1 BTCUSDT futures, 0.01 XAUUSD)")
     a.add_argument("--bar", type=int, default=60, help="bar length in seconds (default 60)")
     a.add_argument("--row-ticks", type=int, default=0, help="ticks per footprint row (0 = auto: about 20 rows per bar)")
-    a.add_argument("--hvn-period", default="5", help="HVN profile length: 5 (minutes), 15S, 1H, D, W (default 5)")
+    a.add_argument("--hvn-period", default="auto",
+                   help="HVN profile length: auto (by bar length, as in TradingView), 5 (minutes), 15S, 1H, D, W, M")
     a.add_argument("--tools", default="hvn,imb,ha,ptk", help="comma list of hvn, imb, ha, ptk (default all)")
     a.add_argument("--lookahead", type=int, default=30, help="bars after a zone touch for held / broke (default 30)")
     a.add_argument("--out", default="idcator_out", help="output folder")

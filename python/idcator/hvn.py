@@ -1,5 +1,5 @@
-"""HVN Profile: a volume profile per period (5 minutes by default); its high volume nodes become zones that last
-until price trades back into them. Label: POC volume | buyers or sellers share ("1.2k | 64%").
+"""HVN Profile: a volume profile per period (by default chosen from the bar length: about 15-25 bars per profile); its
+high volume nodes become zones that last until price trades back into them. Label: POC volume | buyers or sellers share ("1.2k | 64%").
 
 Same rules and defaults as TradingView/IDC_HVN_Profile.pine (the source of truth).
 """
@@ -17,7 +17,8 @@ from .footprint import Bar, desc, round_half_up
 
 @dataclass
 class HvnSettings:
-    period: str = "5"               # profile length: "5" / "5min" (minutes), "15S", "1H", "D", "W"
+    period: str = "auto"            # profile length: "auto" (by bar length), "5" / "5min" (minutes), "15S", "1H",
+                                    # "D", "W", "M" (month), "3M"
     row_ticks: int = 0              # profile row size in ticks, 0 = auto (target_rows rows per profile)
     target_rows: int = 60
     threshold: float = 70.0         # HVN threshold, % of the smoothed peak
@@ -28,17 +29,39 @@ class HvnSettings:
     max_clusters: int = 3           # per period
     grace: int = 0                  # bars after the period before a touch counts
     label_value: str = "POC volume"  # or "Cluster volume"
-    tz: str = "UTC"                 # day / week boundaries of "D" and "W" periods
+    tz: str = "UTC"                 # day / week / month boundaries of "D", "W" and "M" periods
 
 
-def period_seconds(period: str) -> int:
-    """Seconds of a period: "5" or "5min" = 300, "15S" = 15, "1H" = 3600, "D" = 86400, "W" = 604800."""
-    m = re.fullmatch(r"\s*(\d*)\s*(s|sec|min|m|h|d|w)?\s*", str(period), re.I)
+def auto_period(bar_seconds: int) -> str:
+    """The profile timeframe of 'Auto profile timeframe' (TradingView): about 15-25 bars per profile."""
+    for limit, tf in ((15, "5"), (30, "10"), (60, "15"), (180, "60"), (300, "120"), (900, "240"), (3600, "D"),
+                      (14400, "W"), (86400, "M"), (604800, "3M")):
+        if bar_seconds <= limit:
+            return tf
+    return "12M"
+
+
+def parse_period(period: str) -> tuple[str, int]:
+    """(unit, count) of a period: "5" / "5min" -> ("s", 300), "15S" -> ("s", 15), "1H" -> ("s", 3600),
+    "D" -> ("D", 1), "W" -> ("W", 1), "3M" -> ("M", 3) (uppercase M = months, as in TradingView)."""
+    m = re.fullmatch(r"\s*(\d*)\s*(S|s|sec|min|m|H|h|D|d|W|w|M)?\s*", str(period))
     if not m:
         raise ValueError(f"unknown period {period!r}")
     n = int(m.group(1) or 1)
-    unit = (m.group(2) or "min").lower()
-    return n * {"s": 1, "sec": 1, "min": 60, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
+    unit = m.group(2) or "min"
+    if unit == "M":
+        return "M", n
+    if unit in ("D", "d"):
+        return "D", n
+    if unit in ("W", "w"):
+        return "W", n
+    return "s", n * {"S": 1, "s": 1, "sec": 1, "min": 60, "m": 60, "H": 3600, "h": 3600}[unit]
+
+
+def period_seconds(period: str) -> int:
+    """Length of a period in seconds (a month counts as 30 days)."""
+    unit, n = parse_period(period)
+    return n * {"s": 1, "D": 86400, "W": 604800, "M": 2592000}[unit]
 
 
 @dataclass
@@ -154,19 +177,23 @@ def hvn_profile(bars: list[Bar], tick: float, fp_ticks: int, bar_seconds: int,
     its period), ``volume``, ``poc_volume``, ``buy_share``, ``label`` ("1.2k | 64%"), ``end_bar`` / ``end_time`` (the
     bar that traded back into it). ``fp_ticks``: ticks per footprint row of the bars."""
     s = settings or HvnSettings()
-    psec = period_seconds(s.period)
+    period = auto_period(bar_seconds) if s.period == "auto" else s.period
+    unit, count = parse_period(period)
+    psec = period_seconds(period)
     if bar_seconds >= psec:
         raise ValueError("the profile period must be longer than the bars")
     pms = psec * 1000
 
     def key_of(t: pd.Timestamp) -> int:
-        if psec < 86400:
+        if unit == "s":
             ms = t.value // 1_000_000
             return ms - ms % pms
-        lt = t.tz_convert(s.tz)
-        d = lt.normalize()
-        if psec >= 604800:
+        d = t.tz_convert(s.tz).normalize()
+        if unit == "W":
             d = d - pd.Timedelta(days=d.weekday())
+        elif unit == "M":
+            idx = (d.year * 12 + d.month - 1) // count * count
+            d = pd.Timestamp(year=idx // 12, month=idx % 12 + 1, day=1, tz=s.tz)
         return d.value // 1_000_000
 
     zones: list[dict] = []
@@ -217,7 +244,7 @@ def hvn_profile(bars: list[Bar], tick: float, fp_ticks: int, bar_seconds: int,
                     cur.low = min(cur.low, t)
                     cur.high = max(cur.high, t)
         cur.end_bar, cur.end_time = b.index, b.end
-        if psec < 86400 and b.end.value // 1_000_000 >= cur.key + pms:
+        if unit == "s" and psec < 86400 and b.end.value // 1_000_000 >= cur.key + pms:
             finalize(cur, b)
             cur = None
     return pd.DataFrame(zones, columns=["period_start", "period_end", "start_bar", "period_end_bar", "created_bar",

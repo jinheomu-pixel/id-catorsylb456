@@ -97,7 +97,7 @@ def test_estimated_matches_lite(intrabars):
     hvn = idc.hvn_profile(bars, tick, rt, 60)
     py_hvn = {(int(a.start_bar), r(a.bottom), r(a.top), _end(a.end_bar, last), a.label) for a in hvn.itertuples()}
     pine_hvn = hvn_pine({**d, "labels": [lb for lb in d["labels"] if "label_right" in str(lb.get("style"))]})
-    assert len(pine_hvn) > 10 and pine_hvn <= py_hvn
+    assert len(pine_hvn) > 5 and pine_hvn <= py_hvn
     ha = idc.heavy_absorption(bars, tick)
     py_ha = {(int(a.bar), r(a.price), a.label) for a in ha.itertuples() if a.bar < last}
     pine_ha = {(o["x"], r(o["y"]), o["text"]) for o in d["labels"] if o["x"] < last

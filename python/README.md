@@ -49,7 +49,7 @@ python -m idcator analyze --candles XAUUSD_1m.csv --tick 0.001 --bar 60 --out ha
 - `--tick`: ukuran tick harga. Contoh: NQ 0.25, GC/MGC 0.1, BTCUSDT futures 0.1, XAUUSD OANDA 0.001, XAUUSD di MT5 biasanya 0.01.
 - `--bar`: panjang bar dalam detik (15, 60, 300, ...).
 - `--row-ticks`: tinggi satu baris footprint dalam tick. Default 0 = otomatis, sekitar 20 baris per bar seperti di MT5. Kalau Imbalance tidak menemukan zona, coba angka lebih kecil.
-- `--hvn-period`: panjang profil HVN: `5` (menit), `15S`, `1H`, `D`, `W`.
+- `--hvn-period`: panjang profil HVN. Default `auto` = sama dengan TradingView, sekitar 15–25 bar per profil (bar 1 menit → 15 menit). Bisa juga `5` (menit), `15S`, `1H`, `D`, `W`, `M`.
 - `--tools hvn,imb,ha,ptk`: alat yang dijalankan (default semua).
 - `--lookahead`: jumlah bar setelah zona disentuh untuk menilai bertahan atau jebol (default 30).
 

@@ -35,7 +35,7 @@ function session(seed, barSec, bars, tradesPerBar) {
 const plain = (o) => Object.fromEntries(Object.entries(o).filter(([k, v]) => !k.startsWith('_') && k !== 'id' && typeof v !== 'object' && typeof v !== 'function'));
 function dump(ctx) {
     const d = drawings(ctx);
-    const ticks = (ctx.plots?.['Ticks per row'] ?? ctx.plots?.['Footprint ticks per row'])?.data?.at(-1)?.value;
+    const ticks = Number((d.tables.flatMap((t) => (t.cells ?? []).flat()).map((c) => c?.tooltip ?? '').join(' ').match(/ticks per row: (\d+)/i) ?? [])[1]);
     return { ticksPerRow: ticks, boxes: d.boxes.map(plain), labels: d.labels.map(plain), lines: d.lines.map(plain) };
 }
 
@@ -64,8 +64,16 @@ gz('lite60.intrabars15.csv.gz', candlesCsv(candlesAt(m, 15)));
 const lite = { tick: m.tick, barSec: 60, bars: m.candles.length, runs: {} };
 // (the suite's drawing caps apply: the Python tests check that everything Lite drew is in Python's result)
 const allOn = { 'HVN Profile': true, 'Imbalance Levels': true, 'Heavy Absorption': true, 'Pressure Toolkit': true };
+// Lite's clean defaults hide touched zones; the comparison keeps them (and the suite's caps), for more to compare
+const liteSrc = fs.readFileSync(path.join(TV, 'IDC_OrderFlow_Lite.pine'), 'utf8')
+    .replaceAll('input.bool(false, "Keep touched zones"', 'input.bool(true, "Keep touched zones"')
+    .replace('input.int(60, "Max zones on chart"', 'input.int(250, "Max zones on chart"')
+    .replace('input.int(40, "Max zones on chart"', 'input.int(100, "Max zones on chart"');
+const liteFile = path.join(here, 'out', 'lite-keep-touched.pine');
+fs.mkdirSync(path.dirname(liteFile), { recursive: true });
+fs.writeFileSync(liteFile, liteSrc);
 for (const ib of ['Chart bars only', '15 seconds']) {
-    lite.runs[ib] = dump(await runPine(path.join(TV, 'IDC_OrderFlow_Lite.pine'), m, { ...allOn, Intrabars: ib }));
+    lite.runs[ib] = dump(await runPine(liteFile, m, { ...allOn, Intrabars: ib }));
     console.log('lite60', ib, lite.runs[ib].boxes.length, 'boxes', lite.runs[ib].labels.length, 'labels');
 }
 gz('lite60.pine.json.gz', JSON.stringify(lite));

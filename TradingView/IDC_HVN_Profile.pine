@@ -7,13 +7,15 @@
 // P = share of the dominant side (green = buyers, red = sellers). Zones extend until price trades back into them.
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Not a buy/sell signal.
 //@version=6
-indicator("IDC HVN Profile", "IDC HVN", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
+indicator("IDC HVN Profile", "IDC HVN", overlay = true, scale = scale.right, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
      max_polylines_count = 100, max_bars_back = 5000)
 
 // ───────────────────────────────────────────── inputs
 G_PER = "Profile"
+bool   autoPeriodInput = input.bool(true, "Auto profile timeframe", group = G_PER,
+     tooltip = "About 15-25 bars per profile, on every chart timeframe: 15 s -> 5 min (as in the videos), 30 s -> 10 min, 1 min -> 15 min, 3 min -> 1 hour, 5 min -> 2 hours, 15 min -> 4 hours, 30 min and 1 hour -> 1 day, 4 hours -> 1 week, 1 day -> 1 month.")
 string periodInput     = input.timeframe("5", "Profile timeframe", group = G_PER,
-     tooltip = "Length of each profile: 1 minute to Weekly. Must be higher than the chart timeframe.")
+     tooltip = "Length of each profile when 'Auto profile timeframe' is off: 1 minute to Weekly. Must be higher than the chart timeframe.")
 int    rowTicksInput   = input.int(0, "Row size (ticks, 0 = auto)", minval = 0, group = G_PER)
 int    fpTicksInput    = input.int(0, "Footprint ticks per row (0 = auto)", minval = 0, group = G_PER,
      tooltip = "Finest price step of the profile. 0 = auto: 1 tick on futures and stocks; on crypto and spot metals about 20 rows across a typical bar of this timeframe.")
@@ -68,9 +70,13 @@ string rowCoin      = syminfo.basecurrency
 string rowQuote     = syminfo.currency
 bool   rowInDollars = rowQuote == "USD" or rowQuote == "USDT" or rowQuote == "USDC" or rowQuote == "FDUSD" or rowQuote == "BUSD" or
      rowQuote == "USDE" or rowQuote == "DAI" or rowQuote == "TUSD" or rowQuote == "PYUSD" or rowQuote == "USD1" or rowQuote == "EUR" or rowQuote == "GBP"
+string rowTicker    = syminfo.ticker
 //@variable Rough dollar price of a coin or a spot metal, 0 when it is not listed. Only the order of magnitude matters:
-// a price off by 2x moves the row size by one step.
-float  rowListedPx  = not rowInDollars ? 0.0 :
+// a price off by 2x moves the row size by one step. Spot metals are also known by their ticker (OANDA:XAUUSD and other
+// broker symbols may carry no base currency).
+float  rowListedPx  = rowTicker == "XAUUSD" or rowTicker == "GOLD" ? 4000.0 : rowTicker == "XAGUSD" or rowTicker == "SILVER" ? 50.0 :
+     rowTicker == "XPTUSD" or rowTicker == "PLATINUM" ? 1500.0 : rowTicker == "XPDUSD" or rowTicker == "PALLADIUM" ? 1200.0 :
+     not rowInDollars ? 0.0 :
      rowCoin == "BTC" or rowCoin == "WBTC" ? 100000.0 :
      rowCoin == "ETH" or rowCoin == "WETH" ? 3500.0 :
      rowCoin == "BNB" ? 700.0 :
@@ -124,7 +130,6 @@ int    autoRow      = rowRefPx <= 0 ? 1 :
 
 int fpTicks = fpTicksInput > 0 ? fpTicksInput : autoRow
 footprint fp = request.footprint(fpTicks)
-plot(fpTicks, "Footprint ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
 
 type Period
@@ -441,10 +446,15 @@ finalize(Period p) =>
         deleteZone(zones.remove(drop))
 
 // ───────────────────────────────────────────── period bookkeeping
-int  pKey      = time(periodInput)
-bool tfTooHigh = timeframe.in_seconds() >= timeframe.in_seconds(periodInput)
+int    chartSec  = timeframe.in_seconds()
+//@variable Profile timeframe in use: automatic (about 15-25 bars per profile) or the input.
+string profileTf = not autoPeriodInput ? periodInput : chartSec <= 15 ? "5" : chartSec <= 30 ? "10" : chartSec <= 60 ? "15" :
+     chartSec <= 180 ? "60" : chartSec <= 300 ? "120" : chartSec <= 900 ? "240" : chartSec <= 3600 ? "D" : chartSec <= 14400 ? "W" :
+     chartSec <= 86400 ? "M" : chartSec <= 604800 ? "3M" : "12M"
+int    pKey      = time(profileTf)
+bool   tfTooHigh = chartSec >= timeframe.in_seconds(profileTf)
 // end of an intraday period (Daily/Weekly periods close when the next period's first bar arrives)
-int  pEnd      = timeframe.in_seconds(periodInput) < 86400 and not na(pKey) ? pKey + timeframe.in_seconds(periodInput) * 1000 : na
+int    pEnd      = timeframe.in_seconds(profileTf) < 86400 and not na(pKey) ? pKey + timeframe.in_seconds(profileTf) * 1000 : na
 
 // a new period started: the previous one is complete (if it was not finalized at its last bar already)
 if not na(cur) and pKey != cur.key
@@ -518,10 +528,11 @@ if barstate.islast and showLiveInput and not tfTooHigh
         livePoly.delete()
     Period p = na(cur) ? newPeriod(pKey) : cur
     footprint extra = barstate.isconfirmed ? na : fp
-    livePoly := histPoly(p, extra, math.max(p.startBar, bar_index - 4999), math.max(2, int(math.round((timeframe.in_seconds(periodInput) / timeframe.in_seconds()) * histWidthInput / 100))), liveColorInput)
+    livePoly := histPoly(p, extra, math.max(p.startBar, bar_index - 4999), math.max(2, int(math.round((timeframe.in_seconds(profileTf) / chartSec) * histWidthInput / 100))), liveColorInput)
 
 var table info = table.new(position.top_right, 1, 1)
 if barstate.islast
     string msg = tfTooHigh ? "IDC HVN: choose a profile timeframe higher than the chart timeframe" :
          not anyFp ? (str.length(rowHint("IDC HVN", fpTicks, false)) > 0 ? rowHint("IDC HVN", fpTicks, false) : "IDC HVN: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)") : ""
-    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)
+    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9,
+         tooltip = "Footprint ticks per row: " + str.tostring(fpTicks))

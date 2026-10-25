@@ -82,7 +82,8 @@ def tool_body(path, prefix, switch, title):
     src = src[src.index('\n', i) + 1:]
     src = re.sub(r'(?m)^(int    rowTicksInput .*\n(?:     .*\n)?)', '', src) if prefix != 'hvn' else src
     src = re.sub(r'(?m)^int    fpTicksInput .*\n(?:     .*\n)?', '', src)
-    src = cut(src, '// ───────────────────────────────────────────── footprint row size', 'display = display.data_window, editable = false)\n')
+    i = src.index('// ───────────────────────────────────────────── footprint row size')
+    src = src[:i] + src[src.index('\n', src.index('footprint fp = request.footprint(', i)) + 1:]
     src = src.replace('float tick = syminfo.mintick\n', '')
     src = src.replace('var bool anyFp = false\nif not na(fp)\n    anyFp := true\n', '')
     # the row size hint (typRange and rowHint) is shared: once in the suite's status section
@@ -244,6 +245,32 @@ if volume > 0 and estK1 - estK0 + 1 <= 2000
     fp := EstFootprint.new(er, eb.sum(), es.sum())
 """
 
+# Lite: rows of about 1/20 of a typical bar of the chart, from the symbol's own daily range (any symbol, any timeframe;
+# no "simple" row size needed without request.footprint)
+LITE_ROWS = """// Lite: rows of about 1/20 of a typical bar of this chart, from the daily range of the previous days (works for any
+// symbol and timeframe); the first day, without a previous day, uses the automatic size above.
+float estDayRange = timeframe.in_seconds() < 86400 ?
+     request.security(syminfo.tickerid, "D", nz(ta.sma(high - low, 5), high - low)[1], lookahead = barmerge.lookahead_on) : na
+float estBarRange = timeframe.in_seconds() < 86400 ? estDayRange * math.sqrt(timeframe.in_seconds() / 86400) :
+     nz(ta.sma(high - low, 20), high - low)
+float estRaw  = estBarRange / 20
+float estMag  = math.pow(10, math.floor(math.log10(estRaw)))
+float estF    = estRaw / estMag
+int   estAuto = na(estRaw) or estRaw <= 0 ? autoRow :
+     math.max(1, int(math.round((estF < 1.5 ? 1.0 : estF < 2.25 ? 2.0 : estF < 3.5 ? 2.5 : estF < 7.5 ? 5.0 : 10.0) * estMag / syminfo.mintick)))
+int rowTicks = rowTicksInput > 0 ? rowTicksInput : estAuto
+"""
+
+# Lite: a clean chart on every timeframe (the estimate makes more, smaller signals than real footprints): touched zones
+# go away, fewer zones and nodes
+LITE_DEFAULTS = [
+    (r'(bool\s+imbKeepTouchedInput\s*=\s*input\.bool\()true', r'\1false'),
+    (r'(bool\s+hvnKeepTouchedInput\s*=\s*input\.bool\()true', r'\1false'),
+    (r'input\.int\(250, "Max zones on chart", minval = 10, maxval = 300', 'input.int(60, "Max zones on chart", minval = 10, maxval = 300'),
+    (r'input\.int\(100, "Max zones on chart", minval = 10, maxval = 100', 'input.int(40, "Max zones on chart", minval = 10, maxval = 100'),
+    (r'input\.int\(3, "Max clusters per period"', 'input.int(2, "Max clusters per period"'),
+]
+
 
 def make_lite(suite):
     """The suite on estimated footprints: same tools, same drawings, data from candles."""
@@ -255,11 +282,9 @@ def make_lite(suite):
 """, """// Runs on every TradingView plan: the footprints (buy and sell volume per price) are ESTIMATED from candles, see
 // "estimated footprint" below. For real footprint data use IDC Order Flow (needs a Premium or Ultimate plan).
 """)
-    old_ind = ('indicator("IDC Order Flow", "IDC", overlay = true, max_boxes_count = 500, max_labels_count = 500, '
-               'max_lines_count = 500,\n     max_polylines_count = 100)')
+    old_ind = 'indicator("IDC Order Flow", "IDC", overlay = true,'
     assert s.count(old_ind) == 1
-    s = s.replace(old_ind, 'indicator("IDC Order Flow Lite", "IDC Lite", overlay = true, max_boxes_count = 500, '
-                           'max_labels_count = 500,\n     max_lines_count = 500, max_polylines_count = 100)')
+    s = s.replace(old_ind, 'indicator("IDC Order Flow Lite", "IDC Lite", overlay = true,')
     assert 'IDC_OrderFlow_Lite.pine: the same tools' not in s
     # type names of the footprint API -> the estimate's types (code only, not comments or strings)
     s = code_sub(s, lambda c: re.sub(r'(?<![\w.])volume_row(?!\w)', 'EstRow', re.sub(r'(?<![\w.])footprint(?!\w)', 'EstFootprint', c)))
@@ -269,6 +294,12 @@ def make_lite(suite):
     anchor = '\n// ───────────────────────────────────────────── footprint row size'
     assert s.count(anchor) == 1
     s = s.replace(anchor, '\n' + LITE_INPUT + anchor)
+    old_rows = 'int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow\n'
+    assert s.count(old_rows) == 1
+    s = s.replace(old_rows, LITE_ROWS)
+    for pat, rep in LITE_DEFAULTS:
+        s, n = re.subn(pat, rep, s)
+        assert n == 1, pat
     s = s.replace('"IDC Order Flow: no footprint data (needs a Premium/Ultimate plan and a symbol with volume)"',
                   '"IDC Order Flow Lite: no volume data on this symbol"')
     s = s.replace('rowHint("IDC Order Flow", rowTicks,', 'rowHint("IDC Order Flow Lite", rowTicks,')
@@ -298,8 +329,8 @@ def main():
 // Needs TradingView volume footprint data (request.footprint: Premium or Ultimate plan). Without such a plan, use
 // IDC_OrderFlow_Lite.pine: the same tools on footprints estimated from candles, for every plan.
 // GENERATED by tools/build_suite.py from the four single-tool scripts in this folder: edit those, then run the build.
-indicator("IDC Order Flow", "IDC", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
-     max_polylines_count = 100)
+indicator("IDC Order Flow", "IDC", overlay = true, scale = scale.right, max_boxes_count = 500, max_labels_count = 500,
+     max_lines_count = 500, max_polylines_count = 100)
 // HVN zones start at their period's first bar (up to 5000 bars back)
 max_bars_back(time, 5000)
 
@@ -311,7 +342,6 @@ int    rowTicksInput = input.int(0, "Ticks per row (0 = auto)", minval = 0, grou
 %s
 int rowTicks = rowTicksInput > 0 ? rowTicksInput : autoRow
 footprint fp = request.footprint(rowTicks)
-plot(rowTicks, "Ticks per row", display = display.data_window, editable = false)
 float tick = syminfo.mintick
 
 %s
@@ -329,7 +359,7 @@ if barstate.islast
          hvnOn and %s ? "IDC HVN: choose a profile timeframe higher than the chart timeframe" :
          haOn and not %s ? "IDC Heavy Absorption: collecting statistics (" + str.tostring(%s) + "/" + str.tostring(%s) + ")" :
          ptkOn and not %s ? "IDC Pressure Toolkit: collecting statistics" : hint
-    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9)
+    table.cell(info, 0, 0, msg, text_color = color.orange, text_size = 9, tooltip = "Ticks per row: " + str.tostring(rowTicks))
 ''' % (switches, tip, shared_rows.rstrip() + '\n', '\n\n'.join(parts), hint.rstrip() + '\n',
        m['hvn']['tfTooHigh'], m['ha']['ready'], m['ha']['totN'], m['ha']['minSamplesInput'], m['ptk']['ready'])
     open(OUT, 'w').write(suite)

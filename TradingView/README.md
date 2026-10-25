@@ -17,7 +17,7 @@ Keempat alat ada di dalamnya dan bisa dinyalakan atau dimatikan di setting, grup
 | **`IDC_OrderFlow.pine`** | **IDC** | **Keempat alat di bawah dalam satu indikator, masing-masing on/off.** Footprint asli: Premium/Ultimate |
 | **`IDC_OrderFlow_Lite.pine`** | **IDC Lite** | **Sama, tapi footprint diperkirakan dari candle. Semua paket TradingView** |
 | `IDC_Imbalance_Levels.pine` | IDC Imbalance | Zona hijau/merah dari stacked imbalance diagonal, label `12.5x \| 165`. Zona memanjang sampai disentuh harga |
-| `IDC_HVN_Profile.pine` | IDC HVN | Zona High Volume Node per periode (default 5 menit). Zona terbesar oranye, lainnya biru-abu. Label `124 \| 65%` |
+| `IDC_HVN_Profile.pine` | IDC HVN | Zona High Volume Node per periode (otomatis menurut timeframe chart: 15 detik → 5 menit, 1 menit → 15 menit, dan seterusnya). Zona terbesar oranye, lainnya biru-abu. Label `124 \| 65%` |
 | `IDC_Heavy_Absorption.pine` | IDC Heavy Abs | Lingkaran hijau/merah berisi angka volume di harga terberat. Angkanya terus naik di bar yang sedang berjalan |
 | `IDC_Pressure_Toolkit.pine` | IDC Pressure | Bubble redup/terang, kotak big trade + angka, titik absorption di wick, garis absorption, dan level psikologis |
 
@@ -44,7 +44,7 @@ File terpisah dipasang dengan cara yang sama, satu file per indikator.
 ## Setup seperti di video
 
 - Chart **NQ1!**, timeframe **15 detik** (boleh juga 30 detik atau 1 menit).
-- Pasang **IDC Order Flow** dengan setting default: HVN Profile (Profile timeframe 5), Imbalance Levels, dan Heavy Absorption menyala.
+- Pasang **IDC Order Flow** dengan setting default: HVN Profile (profil otomatis 5 menit di chart 15 detik), Imbalance Levels, dan Heavy Absorption menyala.
 - Pressure Toolkit di video ditampilkan di chart terpisah. Kalau mau sama, tambahkan IDC Order Flow sekali lagi dengan hanya Pressure Toolkit yang menyala.
 - Klik kanan di skala harga, pilih **Settings → Symbol**, lalu matikan *Wick*/*Border* kalau ingin tampilan candle setipis di video (opsional).
 
@@ -61,7 +61,7 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
   | ETH/USDT | 1 menit | $0.10 |
   | SOL, XRP, DOGE, dan sejenisnya | 1 menit | 1 tick |
 
-  Nilai yang sedang dipakai terlihat di **Data Window** (*Ticks per row*). Di HVN Profile namanya *Footprint ticks per row*.
+  Nilai yang sedang dipakai terlihat saat kursor diarahkan ke kotak status di pojok kanan atas chart (*Ticks per row: N*).
 - **Kalau barisnya kurang pas**, pojok kanan atas chart menampilkan saran, misalnya `rows look too fine for this chart - try 'Ticks per row' = 500`. Isi angka itu di setting. Ini bisa terjadi pada koin yang jarang atau koin yang harganya sudah jauh berubah.
 - TradingView tidak mengirim footprint untuk bar dengan lebih dari 2000 baris. Indikator mendeteksinya dan menampilkan *too many price rows ... set 'Ticks per row' to N*.
 - **Angka volume dalam satuan koin**, dengan desimal untuk angka kecil: `12.5x | 0.39`, lingkaran `2.24`. Filter seperti *Min volume per level* dan *Min stack volume* juga dalam satuan koin.
@@ -70,7 +70,7 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
 
 ## Emas dan logam spot (XAUUSD)
 
-- Di simbol seperti `OANDA:XAUUSD` tick-nya 0.001, jauh lebih kecil dari harganya. Jadi ukuran baris otomatis juga dipakai di sini: di 1 menit barisnya $0.10 (100 tick). Perak, platinum, dan paladium (`XAG`, `XPT`, `XPD`) juga dikenali.
+- Di simbol seperti `OANDA:XAUUSD` tick-nya 0.001, jauh lebih kecil dari harganya. Jadi ukuran baris otomatis juga dipakai di sini: di 1 menit barisnya $0.10 (100 tick). Perak, platinum, dan paladium juga dikenali, dari base currency (`XAU`, `XAG`, `XPT`, `XPD`) atau dari tickernya (`XAUUSD`, `GOLD`, `XAGUSD`, `SILVER`, ...).
 - Volume di simbol CFD/broker (OANDA, FXCM, dan sejenisnya) adalah volume broker itu sendiri, bukan volume bursa. Untuk order flow emas yang sebenarnya, pakai futures `COMEX:GC1!` atau `COMEX:MGC1!` (barisnya 1 tick = $0.10).
 
 ## IDC Order Flow Lite (tanpa Premium)
@@ -83,13 +83,31 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
 - 10 % sisanya diperdagangkan dua arah di sekitar close.
 - Hasilnya diolah keempat alat persis seperti footprint asli.
 
+**Chart tetap bersih di semua timeframe** (default Lite):
+- Zona Imbalance dan HVN yang sudah disentuh harga **dihapus**. Yang tersisa hanya zona yang masih berlaku. Untuk menampilkannya lagi, nyalakan *Keep touched zones*.
+- Paling banyak 60 zona Imbalance, 40 zona HVN, dan 2 node HVN per profil.
+- **Panjang profil HVN otomatis** mengikuti timeframe chart, sekitar 15–25 bar per profil:
+
+  | Chart | Profil |
+  |---|---|
+  | 15 detik | 5 menit (seperti di video) |
+  | 1 menit | 15 menit |
+  | 5 menit | 2 jam |
+  | 15 menit | 4 jam |
+  | 30 menit dan 1 jam | 1 hari |
+  | 4 jam | 1 minggu |
+  | 1 hari | 1 bulan |
+
+  Matikan *Auto profile timeframe* untuk memilih sendiri.
+- **Ukuran baris otomatis dari range harian** simbol itu sendiri, sekitar 20 baris per candle biasa. Ini berlaku untuk semua simbol (emas, indeks, forex, crypto) dan semua timeframe. Hari pertama di chart memakai ukuran bawaan.
+
 **Setting *Intrabars*** (grup *Data (Lite)*): candle yang lebih kecil di dalam setiap bar memberi perkiraan yang lebih halus.
 - *Auto*: 1 menit untuk chart sampai 1 jam, 5 menit sampai 4 jam, dan seterusnya. Di chart 1 menit ke bawah dipakai candle chart itu sendiri.
 - *1/5/15 seconds*: butuh paket TradingView yang punya data detik.
 
 **Yang perlu diketahui:**
 - Angka volume di label adalah **perkiraan**, bukan transaksi asli.
-- **HVN Profile** paling dekat dengan aslinya. Di tes, zona HVN Lite menyentuh 88 % zona footprint asli dengan candle saja, dan 98 % dengan intrabar 15 detik.
+- **HVN Profile** paling dekat dengan aslinya. Di tes (profil 5 menit), zona HVN Lite menyentuh 86 % zona footprint asli dengan candle saja, dan 96 % dengan intrabar 15 detik.
 - **Imbalance Levels** tanpa intrabar menandai badan candle yang bergerak kuat, dengan label rasio minimum (`5x | ...`). Dengan intrabar, zonanya lebih mirip aslinya.
 - **Heavy Absorption** dan **Pressure Toolkit**: lingkaran dan titik muncul di bar dengan volume padat; posisinya perkiraan (biasanya di ujung wick).
 - Untuk order flow yang sebenarnya: Premium/Ultimate dengan `IDC_OrderFlow.pine`, versi MT5 (membaca tick sendiri), atau versi Python dengan data trade.
@@ -107,7 +125,7 @@ Klik ikon jam alarm, pilih **Condition** = nama indikator, lalu **Any alert() fu
 TradingView menjalankan ulang script di **setiap tick**, jadi semua alat ikut update live. Yang masih terbentuk ditampilkan **bergaris putus-putus**. Begitu bar atau periodenya selesai, garisnya jadi permanen (solid). Contohnya ada di `preview-live.png`.
 
 - **Imbalance:** stacked imbalance dari bar yang sedang berjalan sudah tampil sebagai kotak putus-putus dan ikut berubah setiap tick. Saat bar close, kotak itu menjadi zona tetap. Zona yang sudah ada berhenti tepat di tick yang menyentuhnya.
-- **HVN:** node dari periode yang sedang berjalan (misalnya 5 menit) tampil putus-putus beserta labelnya, lalu menjadi zona tetap begitu periodenya selesai.
+- **HVN:** node dari periode yang sedang berjalan tampil putus-putus beserta labelnya, lalu menjadi zona tetap begitu periodenya selesai.
 - **Heavy Absorption:** lingkaran muncul di harga terberat saat bar masih berjalan, lalu angkanya naik setiap ada transaksi di harga itu. Alert bisa dipasang *Live*.
 - **Pressure Toolkit:** bubble dan titik di bar berjalan ikut berubah. Garis absorption tampil putus-putus selama bar berjalan, lalu menjadi permanen saat close.
 
@@ -130,12 +148,16 @@ Tampilan live bisa dimatikan per alat di setting (*Show the forming bar's stacks
 Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Script open-source dari LuxAlgo) memakai data order-flow buatan. Tesnya mencakup:
 - hasil per indikator (label, warna, posisi zona);
 - update tick-per-tick (zona berhenti di tick yang menyentuh, angka lingkaran naik live);
-- crypto dan emas: ukuran baris otomatis per koin dan timeframe (juga `OANDA:XAUUSD`), sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat;
+- profil HVN otomatis menurut timeframe chart;
+- crypto dan emas: ukuran baris otomatis per koin dan timeframe (juga `OANDA:XAUUSD`, dikenali dari tickernya), sesi Bitcoin dengan label desimal, dan saran di chart saat baris terlalu rapat;
 - tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan ukuran baris di kelima file dihitung di level atas script hanya dengan fungsi bawaan. Fungsi buatan sendiri tidak dipakai di situ, karena Pine menganggap parameternya *series*. Bagian itu juga tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
 - live: kotak/node/garis putus-putus selama bar berjalan yang menjadi permanen saat close, dan alert live Heavy Absorption;
 - IDC Order Flow: dengan satu alat menyala hasilnya sama persis dengan file terpisahnya. Dengan semua menyala, hasilnya sama dengan gabungan keempatnya (NQ dan Bitcoin). Skenario realtime juga dijalankan pada IDC Order Flow (`--suite`).
+- semua script tanpa plot dan terpasang di skala harga kanan, supaya gambar selalu menempel di candle;
 - IDC Order Flow Lite:
   - tidak memakai `request.footprint()` dan menggambar keempat alat tanpa data footprint;
+  - ukuran baris dari range harian, juga di simbol tanpa base currency;
+  - default bersih: hanya zona yang belum tersentuh, jumlah zona dibatasi, 2 node per profil;
   - perkiraan satu candle naik kuat menghasilkan zona beli tepat di badannya;
   - intrabar membuat zona HVN lebih dekat ke footprint asli;
   - realtime sama dengan history.
@@ -148,7 +170,7 @@ Jalankan:
 ```
 cd tools/pine-test
 npm install
-node run.mjs --verbose          # 27 skenario (crypto, emas, live, IDC Order Flow, Lite)
+node run.mjs --verbose          # 31 skenario (crypto, emas, live, IDC Order Flow, Lite)
 node run.mjs --suite IMB HVN HA PTK   # skenario alat dijalankan pada IDC Order Flow
 node run.mjs --render           # + gambar di tools/pine-test/out/
 node preview.mjs out/preview.png
