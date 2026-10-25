@@ -146,8 +146,8 @@ circleSize(float v, float thr, float vmax) =>
     int(math.round(minSizeInput + (maxSizeInput - minSizeInput) * t))
 
 //@function Price of a footprint row's centre (the traded price with 1 tick per row).
-rowPrice(volume_row r) =>
-    r.down_price() + (r.up_price() - r.down_price() - tick) / 2
+rowPrice(volume_row vr) =>
+    vr.down_price() + (vr.up_price() - vr.down_price() - tick) / 2
 
 var float maxVol = 0.0
 
@@ -174,15 +174,15 @@ float bestBuyPx = na
 float bestSell = 0.0
 float bestSellPx = na
 if not na(fp)
-    for r in fp.rows()
-        float b = r.buy_volume()
-        float s = r.sell_volume()
+    for vr in fp.rows()
+        float b = vr.buy_volume()
+        float s = vr.sell_volume()
         if b > bestBuy
             bestBuy   := b
-            bestBuyPx := rowPrice(r)
+            bestBuyPx := rowPrice(vr)
         if s > bestSell
             bestSell   := s
-            bestSellPx := rowPrice(r)
+            bestSellPx := rowPrice(vr)
 float bN = (bestBuy > 0 ? 1 : 0) + (bestSell > 0 ? 1 : 0)
 float bS = bestBuy + bestSell
 float bQ = bestBuy * bestBuy + bestSell * bestSell

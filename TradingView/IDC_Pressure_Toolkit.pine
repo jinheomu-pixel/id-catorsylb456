@@ -168,8 +168,8 @@ volText(float v) =>
      a >= 100 ? str.tostring(math.round(v)) :
      a >= 10 ? str.tostring(v, "#.#") : a >= 1 ? str.tostring(v, "#.##") : str.tostring(v, "#.###")
 
-rowPrice(volume_row r) =>
-    r.down_price() + (r.up_price() - r.down_price() - tick) / 2
+rowPrice(volume_row vr) =>
+    vr.down_price() + (vr.up_price() - vr.down_price() - tick) / 2
 
 float lMean = lTotN > 0 ? lTotS / lTotN : na
 float lSd   = lTotN > 0 ? math.sqrt(math.max(0.0, lTotQ / lTotN - lMean * lMean)) : na
@@ -206,15 +206,15 @@ if not na(fp)
         array<float> bPx  = array.new_float()
         array<float> sVol = array.new_float()
         array<float> sPx  = array.new_float()
-        for r in rows
-            float b = r.buy_volume()
-            float s = r.sell_volume()
+        for vr in rows
+            float b = vr.buy_volume()
+            float s = vr.sell_volume()
             if b >= weakThr and b > mMean and b > s and b >= dominanceInput * s
                 bVol.push(b)
-                bPx.push(rowPrice(r))
+                bPx.push(rowPrice(vr))
             if s >= weakThr and s > mMean and s > b and s >= dominanceInput * b
                 sVol.push(s)
-                sPx.push(rowPrice(r))
+                sPx.push(rowPrice(vr))
         for side = 0 to 1
             array<float> vols = side == 0 ? bVol : sVol
             array<float> pxs  = side == 0 ? bPx : sPx
@@ -245,14 +245,14 @@ if not na(fp)
             float maxLevel = 0.0
             array<float> heavyPx  = array.new_float()
             array<float> heavyVol = array.new_float()
-            for r in rows
-                bool inWick = atHigh ? r.down_price() > bodyTop + tick * 0.5 : r.up_price() - tick < bodyBot - tick * 0.5
+            for vr in rows
+                bool inWick = atHigh ? vr.down_price() > bodyTop + tick * 0.5 : vr.up_price() - tick < bodyBot - tick * 0.5
                 if inWick
-                    float v = r.total_volume()
+                    float v = vr.total_volume()
                     wickVol  += v
                     maxLevel := math.max(maxLevel, v)
                     if v >= wickThr
-                        heavyPx.push(rowPrice(r))
+                        heavyPx.push(rowPrice(vr))
                         heavyVol.push(v)
             bool dot = maxLevel >= wickThr and maxLevel > lMean and barTotal > 0 and wickVol / barTotal * 100 >= minWickPctInput
             if dot
@@ -335,10 +335,10 @@ if barstate.isconfirmed and not na(fp)
     float q2 = 0.0
     float maxB = 0.0
     float maxS = 0.0
-    for r in fp.rows()
-        float b = r.buy_volume()
-        float s = r.sell_volume()
-        float t = r.total_volume()
+    for vr in fp.rows()
+        float b = vr.buy_volume()
+        float s = vr.sell_volume()
+        float t = vr.total_volume()
         if t > 0
             n2 += 1
             s2 += t

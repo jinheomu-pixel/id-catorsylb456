@@ -171,13 +171,13 @@ var polyline     livePoly = na
 //@function Adds one footprint (bar) to a period's tick maps.
 addRows(Period p, footprint f) =>
     if not na(f)
-        for r in f.rows()
-            float v = r.total_volume()
+        for vr in f.rows()
+            float v = vr.total_volume()
             if v > 0
-                int k = int(math.round(r.down_price() / tick))
+                int k = int(math.round(vr.down_price() / tick))
                 p.vol.put(k, nz(p.vol.get(k)) + v)
-                p.buy.put(k, nz(p.buy.get(k)) + r.buy_volume())
-                p.sell.put(k, nz(p.sell.get(k)) + r.sell_volume())
+                p.buy.put(k, nz(p.buy.get(k)) + vr.buy_volume())
+                p.sell.put(k, nz(p.sell.get(k)) + vr.sell_volume())
                 p.lowTick  := math.min(p.lowTick, k)
                 p.highTick := math.max(p.highTick, k)
 
@@ -193,11 +193,11 @@ rowsOf(Period p, footprint extra, int lowT, int rt, int nRows) =>
         int r = int(math.floor((k - lowT) / rt))
         vol.set(r, vol.get(r) + p.vol.get(k))
     if not na(extra)
-        for row in extra.rows()
-            int k = int(math.round(row.down_price() / tick))
+        for vr in extra.rows()
+            int k = int(math.round(vr.down_price() / tick))
             int r = int(math.floor((k - lowT) / rt))
             if r >= 0 and r < nRows
-                vol.set(r, vol.get(r) + row.total_volume())
+                vol.set(r, vol.get(r) + vr.total_volume())
     vol
 
 //@function HVN clusters of a period, largest volume first.
@@ -317,8 +317,8 @@ histPoly(Period p, footprint extra, int x0, int widthBars, color col) =>
         int lowT  = p.lowTick
         int highT = p.highTick
         if not na(extra)
-            for row in extra.rows()
-                int k = int(math.round(row.down_price() / tick))
+            for vr in extra.rows()
+                int k = int(math.round(vr.down_price() / tick))
                 lowT  := math.min(lowT, k)
                 highT := math.max(highT, k)
         if highT >= lowT

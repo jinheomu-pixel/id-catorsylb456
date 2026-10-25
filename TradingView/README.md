@@ -1,22 +1,31 @@
 # IDCator untuk TradingView (Pine Script v6)
 
-Empat indikator order-flow seperti di video ProfitPro, dibuat untuk TradingView. Datanya dari **footprint asli TradingView**, yaitu volume beli dan jual agresif di setiap harga (`request.footprint`). Ini bukan alat sinyal buy/sell.
+Empat indikator order-flow seperti di video ProfitPro, dibuat untuk TradingView. Ini bukan alat sinyal buy/sell.
 
-**Cukup pasang satu file: `IDC_OrderFlow.pine`** (nama di chart: **IDC**). Keempat alat ada di dalamnya dan bisa dinyalakan atau dimatikan di setting, grup *Tools (on/off)*. Keempat file terpisah tetap disertakan kalau Anda ingin memasang alatnya satu per satu.
+> **Mau pakai footprint asli? Harus paket TradingView Premium atau Ultimate.** Footprint (volume beli dan jual agresif di setiap harga, `request.footprint`) hanya dikirim TradingView ke paket itu. Di paket lain muncul error *"This script uses volume footprints, which are available to only Premium and Ultimate plans"*.
+>
+> **Tanpa Premium:** pakai **`IDC_OrderFlow_Lite.pine`** (nama di chart: **IDC Lite**). Jalan di semua paket, termasuk gratis. Volumenya **perkiraan dari candle**, bukan footprint asli (lihat bagian *IDC Order Flow Lite*).
+
+**Cukup pasang satu file:**
+- Premium/Ultimate: `IDC_OrderFlow.pine` (nama di chart: **IDC**).
+- Paket lain: `IDC_OrderFlow_Lite.pine`.
+
+Keempat alat ada di dalamnya dan bisa dinyalakan atau dimatikan di setting, grup *Tools (on/off)*. Keempat file terpisah (butuh Premium/Ultimate) tetap disertakan kalau Anda ingin memasang alatnya satu per satu.
 
 | File | Nama di chart | Isi |
 |---|---|---|
-| **`IDC_OrderFlow.pine`** | **IDC** | **Keempat alat di bawah dalam satu indikator, masing-masing on/off** |
+| **`IDC_OrderFlow.pine`** | **IDC** | **Keempat alat di bawah dalam satu indikator, masing-masing on/off.** Footprint asli: Premium/Ultimate |
+| **`IDC_OrderFlow_Lite.pine`** | **IDC Lite** | **Sama, tapi footprint diperkirakan dari candle. Semua paket TradingView** |
 | `IDC_Imbalance_Levels.pine` | IDC Imbalance | Zona hijau/merah dari stacked imbalance diagonal, label `12.5x \| 165`. Zona memanjang sampai disentuh harga |
 | `IDC_HVN_Profile.pine` | IDC HVN | Zona High Volume Node per periode (default 5 menit). Zona terbesar oranye, lainnya biru-abu. Label `124 \| 65%` |
 | `IDC_Heavy_Absorption.pine` | IDC Heavy Abs | Lingkaran hijau/merah berisi angka volume di harga terberat. Angkanya terus naik di bar yang sedang berjalan |
 | `IDC_Pressure_Toolkit.pine` | IDC Pressure | Bubble redup/terang, kotak big trade + angka, titik absorption di wick, garis absorption, dan level psikologis |
 
-Contoh tampilan pada data NQ 15 detik simulasi ada di `preview.png` dan `preview-ptk.png`. Tampilan live (bar yang sedang berjalan bergaris putus-putus) ada di `preview-live.png`, dan contoh Bitcoin 1 menit di `preview-crypto.png`.
+Contoh tampilan pada data NQ 15 detik simulasi ada di `preview.png` dan `preview-ptk.png`. Tampilan live (bar yang sedang berjalan bergaris putus-putus) ada di `preview-live.png`, contoh Bitcoin 1 menit di `preview-crypto.png`, dan IDC Order Flow Lite di emas 1 menit (tanpa footprint) di `preview-lite.png`.
 
 ## Syarat
 
-1. **Paket TradingView Premium atau Ultimate.** `request.footprint()` hanya jalan di paket ini; di paket lain script langsung error. Chart detik (15s) juga butuh paket ini.
+1. **Paket TradingView Premium atau Ultimate** untuk `IDC_OrderFlow.pine` dan keempat file terpisah. `request.footprint()` hanya jalan di paket ini; di paket lain script langsung error. Chart detik (15s) juga butuh paket ini. **Tanpa Premium/Ultimate: pakai `IDC_OrderFlow_Lite.pine`.**
 2. **Data real-time CME** untuk NQ/ES (langganan data CME di TradingView). Tanpa itu datanya delay 10 menit.
 3. Simbol yang punya volume, misalnya `CME_MINI:NQ1!`, `CME_MINI:ES1!`, `COMEX:GC1!`, atau crypto dari bursa (lihat bagian Crypto).
 
@@ -26,7 +35,7 @@ FundedNext Futures resmi mendukung TradingView sebagai platform trading. Jadi ch
 
 1. Buka chart di TradingView, klik **Pine Editor** di bawah.
 2. Buka menu nama script di kiri atas Pine Editor, pilih **Create new → Indicator**, lalu hapus semua isinya.
-3. Buka `IDC_OrderFlow.pine`, salin **semua** isinya, lalu tempel di Pine Editor.
+3. Buka `IDC_OrderFlow.pine` (Premium/Ultimate) atau `IDC_OrderFlow_Lite.pine` (paket lain), salin **semua** isinya, lalu tempel di Pine Editor.
 4. Klik **Save** (beri nama, misalnya "IDC Order Flow"), lalu **Add to chart**. Setelah tersimpan, indikator bisa dicari di **Indicators → My scripts**.
 5. Buka setting indikator, lalu di grup **Tools (on/off)** centang alat yang ingin dipakai. Default: HVN Profile, Imbalance Levels, dan Heavy Absorption menyala; Pressure Toolkit mati.
 
@@ -63,6 +72,27 @@ Keempat indikator bisa dipakai di semua pair crypto yang punya data volume di Tr
 
 - Di simbol seperti `OANDA:XAUUSD` tick-nya 0.001, jauh lebih kecil dari harganya. Jadi ukuran baris otomatis juga dipakai di sini: di 1 menit barisnya $0.10 (100 tick). Perak, platinum, dan paladium (`XAG`, `XPT`, `XPD`) juga dikenali.
 - Volume di simbol CFD/broker (OANDA, FXCM, dan sejenisnya) adalah volume broker itu sendiri, bukan volume bursa. Untuk order flow emas yang sebenarnya, pakai futures `COMEX:GC1!` atau `COMEX:MGC1!` (barisnya 1 tick = $0.10).
+
+## IDC Order Flow Lite (tanpa Premium)
+
+`IDC_OrderFlow_Lite.pine` berisi keempat alat yang sama dengan setting yang sama. Bedanya hanya sumber data: footprint **diperkirakan dari candle**, bukan dari `request.footprint()`. Karena itu Lite jalan di semua paket TradingView.
+
+**Cara memperkirakan** (sama persis dengan versi Python, mode `--candles`):
+- Setiap candle dianggap bergerak open → low → high → close kalau close di atas open (open → high → low → close kalau turun).
+- 90 % volumenya disebar di sepanjang jalur itu menurut jarak. Kaki naik dihitung beli, kaki turun dihitung jual. Setiap kaki menyisakan 20 % bagiannya di ujungnya, tempat harga berbalik.
+- 10 % sisanya diperdagangkan dua arah di sekitar close.
+- Hasilnya diolah keempat alat persis seperti footprint asli.
+
+**Setting *Intrabars*** (grup *Data (Lite)*): candle yang lebih kecil di dalam setiap bar memberi perkiraan yang lebih halus.
+- *Auto*: 1 menit untuk chart sampai 1 jam, 5 menit sampai 4 jam, dan seterusnya. Di chart 1 menit ke bawah dipakai candle chart itu sendiri.
+- *1/5/15 seconds*: butuh paket TradingView yang punya data detik.
+
+**Yang perlu diketahui:**
+- Angka volume di label adalah **perkiraan**, bukan transaksi asli.
+- **HVN Profile** paling dekat dengan aslinya. Di tes, zona HVN Lite menyentuh 88 % zona footprint asli dengan candle saja, dan 98 % dengan intrabar 15 detik.
+- **Imbalance Levels** tanpa intrabar menandai badan candle yang bergerak kuat, dengan label rasio minimum (`5x | ...`). Dengan intrabar, zonanya lebih mirip aslinya.
+- **Heavy Absorption** dan **Pressure Toolkit**: lingkaran dan titik muncul di bar dengan volume padat; posisinya perkiraan (biasanya di ujung wick).
+- Untuk order flow yang sebenarnya: Premium/Ultimate dengan `IDC_OrderFlow.pine`, versi MT5 (membaca tick sendiri), atau versi Python dengan data trade.
 
 ## Alert
 
@@ -104,15 +134,21 @@ Script diuji dengan [PineTS](https://github.com/LuxAlgo/PineTS) (runtime Pine Sc
 - tipe data: TradingView hanya menerima ukuran baris yang sudah pasti saat script dimuat (*simple int*). PineTS tidak memeriksa ini, jadi ada tes khusus yang memastikan ukuran baris di kelima file dihitung di level atas script hanya dengan fungsi bawaan. Fungsi buatan sendiri tidak dipakai di situ, karena Pine menganggap parameternya *series*. Bagian itu juga tidak memakai `switch`, `if`, loop, `:=`, `var`, atau data bar;
 - live: kotak/node/garis putus-putus selama bar berjalan yang menjadi permanen saat close, dan alert live Heavy Absorption;
 - IDC Order Flow: dengan satu alat menyala hasilnya sama persis dengan file terpisahnya. Dengan semua menyala, hasilnya sama dengan gabungan keempatnya (NQ dan Bitcoin). Skenario realtime juga dijalankan pada IDC Order Flow (`--suite`).
+- IDC Order Flow Lite:
+  - tidak memakai `request.footprint()` dan menggambar keempat alat tanpa data footprint;
+  - perkiraan satu candle naik kuat menghasilkan zona beli tepat di badannya;
+  - intrabar membuat zona HVN lebih dekat ke footprint asli;
+  - realtime sama dengan history.
+- Versi Python (`python/`) memberi hasil yang sama persis dengan script TradingView di data uji yang sama, termasuk perkiraan Lite.
 
-`IDC_OrderFlow.pine` dibuat otomatis dari keempat file terpisah dengan `python3 tools/build_suite.py`. Perubahan dilakukan di file terpisah, lalu build dijalankan ulang.
+`IDC_OrderFlow.pine` dan `IDC_OrderFlow_Lite.pine` dibuat otomatis dari keempat file terpisah dengan `python3 tools/build_suite.py`. Perubahan dilakukan di file terpisah, lalu build dijalankan ulang.
 
 Jalankan:
 
 ```
 cd tools/pine-test
 npm install
-node run.mjs --verbose          # 23 skenario (crypto, emas, live, IDC Order Flow)
+node run.mjs --verbose          # 27 skenario (crypto, emas, live, IDC Order Flow, Lite)
 node run.mjs --suite IMB HVN HA PTK   # skenario alat dijalankan pada IDC Order Flow
 node run.mjs --render           # + gambar di tools/pine-test/out/
 node preview.mjs out/preview.png

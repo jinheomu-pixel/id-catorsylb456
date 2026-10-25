@@ -104,10 +104,29 @@ export function aggregate(trades, { start, barSec, tick, bars }) {
 }
 
 // ───────────────────────────────────────────── PineTS
+/** Seconds of a TradingView timeframe string: '15S' -> 15, '1' -> 60, '1D' -> 86400. */
+export function tfSeconds(tf) {
+    const m = /^(\d*)([SDWM]?)$/.exec(String(tf));
+    if (!m) return NaN;
+    const n = Number(m[1] || 1);
+    return n * ({ S: 1, '': 60, D: 86400, W: 604800, M: 2592000 })[m[2]];
+}
+
+/** Candles of the market at another timeframe (e.g. the intrabars of request.security_lower_tf), built from its trades. */
+export function candlesAt(market, sec) {
+    if (!Number.isFinite(sec) || sec === market.barSec) return market.candles;
+    market._tfCache ??= new Map();
+    if (!market._tfCache.has(sec)) {
+        const bars = Math.ceil((market.candles.length * market.barSec) / sec);
+        market._tfCache.set(sec, aggregate(market.trades, { start: market.start, barSec: sec, tick: market.tick, bars }).candles);
+    }
+    return market._tfCache.get(sec);
+}
+
 export function provider(market, { symbol = 'NQ1!', withFootprint = true, info = {} } = {}) {
     const p = {
-        getMarketData: async (_t, _tf, _limit, sDate, eDate) =>
-            market.candles.filter((c) => (sDate === undefined || c.openTime >= sDate) && (eDate === undefined || c.openTime <= eDate)),
+        getMarketData: async (_t, tf, _limit, sDate, eDate) =>
+            candlesAt(market, tfSeconds(tf)).filter((c) => (sDate === undefined || c.openTime >= sDate) && (eDate === undefined || c.openTime <= eDate)),
         getSymbolInfo: async () => ({
             ticker: symbol, tickerid: 'CME_MINI:' + symbol, prefix: 'CME_MINI', description: 'E-mini Nasdaq-100 Futures',
             type: 'futures', mintick: market.tick, pricescale: Math.round(1 / market.tick), minmove: 1,

@@ -555,6 +555,79 @@ scenario('SUITE-02 all switched on = the four tools together', 'all four on: the
     }
 });
 
+// ═════════════════════════════════════════════ IDC Order Flow Lite (estimated footprints: every TradingView plan)
+const LITE = path.join(TV, 'IDC_OrderFlow_Lite.pine');
+const ALL_ON = { 'HVN Profile': true, 'Imbalance Levels': true, 'Heavy Absorption': true, 'Pressure Toolkit': true };
+const codeOf = (file) => fs.readFileSync(file, 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+/** Simulated NQ 1-minute session (trends, a range, big prints). */
+function nq60() {
+    return makeMarket({ seed: 42, barSec: 60, segments: [0.5, 0.62, 0.5, 0.4, 0.5, 0.58, 0.45, 0.5, 0.55].flatMap((d, k) => [
+        { bars: 10, tradesPerBar: 680, bigProb: 0.005, revert: d === 0.5 ? { level: 25000 + k * 4, strength: 0.05 } : null, buyProb: d, liftProb: 0.26 },
+        { bars: 10, tradesPerBar: 680, bigProb: 0.005, buyProb: d, liftProb: 0.24 }]) });
+}
+/** HVN zones (bottom, top) of a run: its boxes without text (imbalance zones carry their label inside). */
+const hvnBoxes = (ctx) => drawings(ctx).boxes.filter((b) => !String(b.text ?? '').trim()).map((b) => [Math.min(b.top, b.bottom), Math.max(b.top, b.bottom)]);
+/** Share of `want` zones that overlap a zone of `got`. */
+const overlapShare = (want, got) => (want.length ? want.filter(([lo, hi]) => got.some(([a, b]) => a <= hi && b >= lo)).length / want.length : 0);
+
+scenario('LITE-01 runs on every plan', 'IDC Order Flow Lite has no request.footprint() (Premium/Ultimate only) and draws all four tools without footprint data', async (c) => {
+    const code = codeOf(LITE);
+    c.check(!/request\.footprint\s*\(/.test(code), 'no request.footprint() in the code');
+    c.check(/request\.security_lower_tf\s*\(/.test(code), 'intrabars from request.security_lower_tf()');
+    const m = nq60();
+    const ctx = await runPine(LITE, m, ALL_ON, { withFootprint: false });
+    const d = drawings(ctx);
+    const st = status(ctx);
+    c.check(!/no volume|no footprint/.test(st), `status: "${st}"`);
+    c.check(hvnBoxes(ctx).length >= 5, `HVN zones: ${hvnBoxes(ctx).length}`);
+    c.check(d.boxes.filter((b) => /^\d+(\.\d+)?x \|/.test(String(b.text))).length >= 5, 'imbalance zones');
+    c.check(d.labels.filter((l) => l.text === '●').length >= 2, 'heavy absorption circles / pressure bubbles');
+    c.note(`${d.boxes.length} boxes, ${d.labels.length} labels, ${d.lines.length} lines; status "${st}"`);
+});
+
+scenario('LITE-02 estimate of one strong up bar', 'chart bars only: open 25000, low 24999.50, high 25005, close 25004.50 -> one buy stack from just above the open to just below the close', async (c) => {
+    const t = new Tape();
+    for (let i = 0; i < 5; i++) t.filler(i, 24998.5, 24998.75, 24998, 24999.25, 4);
+    t.filler(5, 25000, 25004.5, 24999.5, 25005, 10);
+    t.filler(6, 25005.5, 25005.75, 25005.25, 25006, 4);
+    const ctx = await runPine(LITE, t.market(), { 'HVN Profile': false, 'Imbalance Levels': true, 'Heavy Absorption': false, 'Pressure Toolkit': false, Intrabars: 'Chart bars only' });
+    const z = drawings(ctx).boxes.filter((b) => b.left === 5);
+    c.eq(1, z.length, 'zones from bar 5');
+    const [lo, hi] = z.length ? [Math.min(z[0].top, z[0].bottom), Math.max(z[0].top, z[0].bottom)] : [NaN, NaN];
+    c.check(near(lo, 25000.25) && near(hi, 25004.5), `buy stack 25000.25 - 25004.50, got ${lo} - ${hi} "${z[0]?.text}"`);
+    c.eq(0, drawings(ctx).boxes.filter((b) => b.left !== 5).length, 'no zone from the quiet bars');
+});
+
+scenario('LITE-03 intrabars sharpen the estimate', '1-minute chart: Lite with 15-second intrabars finds more of the real footprint HVN zones than Lite on chart bars alone', async (c) => {
+    const m = nq60();
+    const real = hvnBoxes(await runPine(SUITE, m, switches(['HVN Profile'])));
+    const share = {};
+    for (const ib of ['Chart bars only', '15 seconds']) {
+        const lite = hvnBoxes(await runPine(LITE, m, { ...switches(['HVN Profile']), Intrabars: ib }));
+        share[ib] = overlapShare(real, lite);
+        c.note(`${ib}: ${lite.length} zones, ${(share[ib] * 100).toFixed(0)} % of the ${real.length} real zones overlapped`);
+    }
+    c.check(share['15 seconds'] >= 0.8, `15-second intrabars overlap at least 80 % of the real zones (${(share['15 seconds'] * 100).toFixed(0)} %)`);
+    c.check(share['15 seconds'] >= share['Chart bars only'], 'intrabars do at least as well as chart bars alone');
+});
+
+scenario('LITE-04 realtime = history', "Lite replayed tick by tick over the last bars ends with the same drawings as a history run on the same data (HVN, Imbalance, Heavy Absorption; without the forming period's live HVN labels and Pressure Toolkit's label cap, which differ the same way in IDC Order Flow: PineTS runs the last historical bar differently from realtime)", async (c) => {
+    const m = makeMarket({ seed: 11, segments: [{ bars: 120, tradesPerBar: 150 }, { bars: 30, buyProb: 0.62, liftProb: 0.3, tradesPerBar: 150 }, { bars: 30, tradesPerBar: 150, revert: { level: 25010, strength: 0.05 } }] });
+    const tape = { trades: m.trades, start: m.start, barSec: 15, tick: m.tick, bars: m.candles.length };
+    const from = m.start + (m.candles.length - 4) * 15000;
+    const end = m.start + (m.candles.length - 1) * 15000 + 500;
+    const inputs = { ...switches(['HVN Profile', 'Imbalance Levels', 'Heavy Absorption']), "Show the forming period's nodes (live, dashed)": false };
+    const live = new Live(LITE, tape, inputs);
+    try {
+        await live.start(from);
+        const ts = m.trades.filter((x) => x.time > from && x.time <= end).map((x) => x.time);
+        for (let k = 0; k < ts.length; k += 7) await live.to(ts[k]);
+        await live.to(end);
+        const hist = await runPine(LITE, live.data(), inputs);
+        c.note(`${sameContents(c, 'live vs history', contents(live.ctx), contents(hist))} drawings`);
+    } finally { live.stop(); }
+});
+
 const selected = filters.length ? scenarios.filter((s) => filters.some((f) => s.name.toLowerCase().includes(f.toLowerCase()))) : scenarios;
 console.log(`IDCator TradingView scripts (PineTS) - ${selected.length} scenario(s)`);
 console.log('='.repeat(100));

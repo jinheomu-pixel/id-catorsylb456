@@ -4,6 +4,15 @@ Replika *clean-room* dari 4 indikator NinjaTrader yang dijual ProfitPro (profitp
 
 > **Bukan sinyal buy/sell otomatis.** Keempat indikator hanya menampilkan data order flow (zona, lingkaran, garis). Keputusan entry/exit tetap di tangan kamu.
 
+## Versi per platform
+
+| Folder | Platform | Data order flow |
+|---|---|---|
+| [`TradingView/`](TradingView/) | TradingView (Pine Script v6) | `IDC_OrderFlow.pine`: footprint asli TradingView, **butuh paket Premium atau Ultimate**. Tanpa paket itu: `IDC_OrderFlow_Lite.pine` (semua paket, volume diperkirakan dari candle) |
+| [`MT5/`](MT5/) | MetaTrader 5 | Tick dari broker (transaksi bursa, atau perubahan harga di CFD) |
+| [`python/`](python/) | Python, untuk analisa | Data trade (Binance, ekspor tick MT5, CSV sendiri) atau candle. Hasilnya sama dengan TradingView, plus statistik apa yang terjadi setelah setiap sinyal |
+| [`NinjaTrader8/`](NinjaTrader8/) | NinjaTrader 8 | Volumetric bars atau Tick Replay (lihat di bawah) |
+
 | Indikator | Fungsi singkat | Nama di NinjaTrader |
 |---|---|---|
 | **Imbalance Levels** | Stacked imbalance bid/ask dijadikan zona support/resistance sampai disentuh harga. Label `rasio x \| volume` | `IDC Imbalance Levels` |
